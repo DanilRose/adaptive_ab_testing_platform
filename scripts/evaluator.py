@@ -10,9 +10,10 @@ import warnings
 warnings.filterwarnings('ignore')
 
 class GANEvaluator:
-    def __init__(self, real_data, synthetic_data):
+    def __init__(self, real_data, synthetic_data, scalers=None):
         self.real_data = real_data
         self.synthetic_data = synthetic_data
+        self.scalers = scalers 
     
     def evaluate_quality(self):
         print("\n" + "="*60)
@@ -111,8 +112,21 @@ class GANEvaluator:
             if not common_columns:
                 return float('inf')
             
-            real_samples = real_numerical[common_columns].values
-            synth_samples = synth_numerical[common_columns].values
+            if self.scalers:
+                real_scaled = real_numerical[common_columns].copy()
+                synth_scaled = synth_numerical[common_columns].copy()
+                
+                for col in common_columns:
+                    if col in self.scalers:
+                        scaler = self.scalers[col]
+                        real_scaled[col] = scaler.transform(real_numerical[[col]])
+                        synth_scaled[col] = scaler.transform(synth_numerical[[col]])
+                
+                real_samples = real_scaled.values
+                synth_samples = synth_scaled.values
+            else:
+                real_samples = real_numerical[common_columns].values
+                synth_samples = synth_numerical[common_columns].values
             
             mu1, sigma1 = np.mean(real_samples, axis=0), np.cov(real_samples, rowvar=False)
             mu2, sigma2 = np.mean(synth_samples, axis=0), np.cov(synth_samples, rowvar=False)
@@ -144,17 +158,13 @@ class GANEvaluator:
         for i, feature in enumerate(features):
             if feature in self.real_data.columns and feature in self.synthetic_data.columns:
                 if self.real_data[feature].dtype in ['int64', 'float64']:
-                    # Для числовых признаков
                     axes[i].hist(self.real_data[feature], bins=30, alpha=0.7, label='Real', density=True, color='blue')
                     axes[i].hist(self.synthetic_data[feature], bins=30, alpha=0.7, label='Synthetic', density=True, color='orange')
                     axes[i].set_title(f'Distribution of {feature}')
                     axes[i].legend()
                 else:
-                    # Для категориальных - ИСПРАВЛЕННАЯ ЛОГИКА
                     real_counts = self.real_data[feature].value_counts().head(10)
                     synth_counts = self.synthetic_data[feature].value_counts()
-                    
-                    # Выравниваем индексы
                     all_categories = list(real_counts.index)
                     for cat in synth_counts.index:
                         if cat not in all_categories and len(all_categories) < 10:
@@ -238,6 +248,31 @@ class GANEvaluator:
                 f.write("❌ ТРЕБУЕТ УЛУЧШЕНИЯ - низкое качество данных\n")
         
         print(f"Отчет сохранен в {save_path}")
+
+    def calculate_ks_statistics(self):
+        numerical_features = self.real_data.select_dtypes(include=[np.number]).columns
+        numerical_features = [f for f in numerical_features if f in self.synthetic_data.columns]
+        
+        ks_stats = {}
+        for feature in numerical_features:
+            real_values = self.real_data[feature]
+            synth_values = self.synthetic_data[feature]
+            ks_stat, _ = stats.ks_2samp(real_values, synth_values)
+            ks_stats[feature] = ks_stat
+        
+        return ks_stats
+
+    def calculate_correlation_difference(self):
+        numerical_features = self.real_data.select_dtypes(include=[np.number]).columns
+        numerical_features = [f for f in numerical_features if f in self.synthetic_data.columns]
+        
+        if len(numerical_features) >= 5:
+            real_corr = self.real_data[numerical_features[:5]].corr()
+            synth_corr = self.synthetic_data[numerical_features[:5]].corr()
+            corr_diff = (real_corr - synth_corr).abs().mean().mean()
+            return corr_diff
+        else:
+            return float('inf')
 
 class TrainingVisualizer:
     @staticmethod

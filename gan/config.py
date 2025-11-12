@@ -2,34 +2,31 @@ import torch
 
 class GANConfig:
     def __init__(self):
-        # Оптимальные настройки для стабильного обучения
-        self.LATENT_DIM = 100
-        self.BATCH_SIZE = 512
-        self.EPOCHS = 300  # Увеличил для реального обучения
-        self.LEARNING_RATE = 0.0002  # Стандартный LR для GAN
         
-        # Используем WGAN-GP для стабильности
-        self.USE_WGAN_GP = True
-        self.LAMBDA_GP = 10
-        self.N_CRITIC = 5
+        self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu") 
+
+        # настройки обучения
+        self.LATENT_DIM = 256 # Размер шума. Чем ниже параметр - тем проще модель
+        self.BATCH_SIZE = 1024 # Размер батча. Влияет на кол-во памяти при обучении. Чем выше — быстрее и больше памяти
+        self.EPOCHS = 50  # Кол-во эпох. Влияет на качество обучения
+        self.LEARNING_RATE = 1e-4 # шаг обучения
+        self.BETA1 = 0.0 # настройка для WGAN_GP. ВСЕГДА ДОЛЖНА БЫТЬ НОЛЬ ИНАЧЕ ВЗРЫВ
+        self.BETA2 = 0.9 # Адаптация, чем ниже - тем хуже
+        self.USE_WGAN_GP = True # лучше применять WGAN_GP режим, иначе данные будут слишком синтетические
+        self.LAMBDA_GP = 10 # контроль за градиентом
+        self.N_CRITIC = 5 # чем выше, тем дискриминатор пытается создать реалистичные данные. Нельзя слишком высокие значения
+        self.GENERATOR_LAYERS = [512, 512, 256, 256, 128] # слои дискриминатора
+        self.DISCRIMINATOR_LAYERS = [512, 512, 256, 256, 128] # слои генератора
+        self.DROPOUT_RATE = 0.1 # влияет на простоту модели. слишком высокие значения - меньше переобучения
+        self.LEAKY_RELU_SLOPE = 0.2 # наклон leakyrelu
         
-        # Оптимизированная архитектура
-        self.GENERATOR_LAYERS = [128, 64]
-        self.DISCRIMINATOR_LAYERS = [128, 64]
+        # просмотр обучения
+        self.LOG_INTERVAL = 10 # промежуток эпох печати логов
+        self.CHECKPOINT_INTERVAL = 100 # промежуток эпох сохранения чекпоинта
+        self.SAMPLE_INTERVAL = 10 # генерация сэмплов
+        self.SAMPLE_SIZE = 1000 # сколько сэмплов
+        self.VALIDATION_INTERVAL = 5  #FID проверка каждые n эпох
         
-        self.DROPOUT_RATE = 0.3
-        self.LEAKY_RELU_SLOPE = 0.2
-        self.BETA1 = 0.5
-        self.BETA2 = 0.9
-        
-        self.DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        # Мониторинг
-        self.LOG_INTERVAL = 100
-        self.CHECKPOINT_INTERVAL = 500
-        self.SAMPLE_INTERVAL = 500
-        self.SAMPLE_SIZE = 1000
-        self.VALIDATION_INTERVAL = 200  # Новая: валидация каждые 200 эпох
-        
+        # ранняя остановка
         self.EARLY_STOPPING_THRESHOLD = 0.05
         self.EARLY_STOPPING_WINDOW = 1000

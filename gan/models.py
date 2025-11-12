@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+from scipy.special import softmax
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler, LabelEncoder
@@ -12,11 +13,18 @@ warnings.filterwarnings('ignore')
 class AdvancedGenerator(nn.Module):
     def __init__(self, latent_dim, output_dim, hidden_dims, dropout_rate):
         super(AdvancedGenerator, self).__init__()
-        
         layers = []
         input_dim = latent_dim
         
-        for i, hidden_dim in enumerate(hidden_dims):
+        layers.extend([
+            nn.Linear(input_dim, hidden_dims[0]),
+            nn.BatchNorm1d(hidden_dims[0]),
+            nn.LeakyReLU(0.2),
+            nn.Dropout(dropout_rate)
+        ])
+        input_dim = hidden_dims[0]
+        
+        for hidden_dim in hidden_dims[1:]:
             layers.extend([
                 nn.Linear(input_dim, hidden_dim),
                 nn.BatchNorm1d(hidden_dim),
@@ -25,18 +33,19 @@ class AdvancedGenerator(nn.Module):
             ])
             input_dim = hidden_dim
         
-        layers.append(nn.Linear(hidden_dims[-1], output_dim))
-        layers.append(nn.Tanh())
+        layers.extend([
+            nn.Linear(hidden_dims[-1], output_dim),
+            nn.Tanh()
+        ])
         
         self.network = nn.Sequential(*layers)
-        
+    
     def forward(self, z):
         return self.network(z)
 
 class AdvancedDiscriminator(nn.Module):
     def __init__(self, input_dim, hidden_dims, dropout_rate, leaky_slope):
         super(AdvancedDiscriminator, self).__init__()
-        
         layers = []
         current_dim = input_dim
         
@@ -44,8 +53,7 @@ class AdvancedDiscriminator(nn.Module):
             layers.extend([
                 nn.Linear(current_dim, hidden_dim),
                 nn.LeakyReLU(leaky_slope),
-                nn.Dropout(dropout_rate),
-                nn.BatchNorm1d(hidden_dim)
+                nn.Dropout(dropout_rate)
             ])
             current_dim = hidden_dim
         
@@ -63,45 +71,103 @@ class WGAN_GP_Generator(nn.Module):
     def __init__(self, latent_dim, output_dim, hidden_dims):
         super(WGAN_GP_Generator, self).__init__()
         
-        layers = []
-        input_dim = latent_dim
+        self.fc1 = nn.Linear(latent_dim, hidden_dims[0])
+        self.bn1 = nn.BatchNorm1d(hidden_dims[0])
         
-        for hidden_dim in hidden_dims:
-            layers.extend([
-                nn.Linear(input_dim, hidden_dim),
-                nn.BatchNorm1d(hidden_dim),
-                nn.ReLU(True),
-            ])
-            input_dim = hidden_dim
+        self.res_blocks = nn.ModuleList()
+        self.shortcuts = nn.ModuleList()
         
-        layers.append(nn.Linear(hidden_dims[-1], output_dim))
-        layers.append(nn.Tanh())
+        current_dim = hidden_dims[0]
+        for i in range(len(hidden_dims) - 1):
+            res_block = nn.Sequential(
+                nn.Linear(current_dim, hidden_dims[i+1]),
+                nn.BatchNorm1d(hidden_dims[i+1]),
+                nn.LeakyReLU(0.2),
+                nn.Linear(hidden_dims[i+1], hidden_dims[i+1]),
+                nn.BatchNorm1d(hidden_dims[i+1])
+            )
+            self.res_blocks.append(res_block)
+            
+            if current_dim != hidden_dims[i+1]:
+                shortcut = nn.Linear(current_dim, hidden_dims[i+1])
+                self.shortcuts.append(shortcut)
+            else:
+                self.shortcuts.append(nn.Identity())
+            
+            current_dim = hidden_dims[i+1]
         
-        self.main = nn.Sequential(*layers)
+        self.output = nn.Linear(current_dim, output_dim)
+        self.tanh = nn.Tanh()
+        
+        self._initialize_weights()
     
-    def forward(self, input):
-        return self.main(input)
+    def forward(self, x):
+        x = self.bn1(self.fc1(x))
+        x = nn.LeakyReLU(0.2)(x)
+        
+        for i, (res_block, shortcut) in enumerate(zip(self.res_blocks, self.shortcuts)):
+            residual = shortcut(x)  
+            x = res_block(x) + residual
+            x = nn.LeakyReLU(0.2)(x)
+        
+        return self.tanh(self.output(x))
+    
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
 
 class WGAN_GP_Discriminator(nn.Module):
     def __init__(self, input_dim, hidden_dims):
         super(WGAN_GP_Discriminator, self).__init__()
         
-        layers = []
-        current_dim = input_dim
+        self.fc1 = nn.Linear(input_dim, hidden_dims[0])
         
-        for hidden_dim in hidden_dims:
-            layers.extend([
-                nn.Linear(current_dim, hidden_dim),
+        self.res_blocks = nn.ModuleList()
+        self.shortcuts = nn.ModuleList()
+        
+        current_dim = hidden_dims[0]
+        for i in range(len(hidden_dims) - 1):
+            res_block = nn.Sequential(
+                nn.Linear(current_dim, hidden_dims[i+1]),
                 nn.LeakyReLU(0.2),
-            ])
-            current_dim = hidden_dim
+                nn.Dropout(0.1),
+                nn.Linear(hidden_dims[i+1], hidden_dims[i+1]),
+                nn.LeakyReLU(0.2),
+                nn.Dropout(0.1)
+            )
+            self.res_blocks.append(res_block)
+            
+            if current_dim != hidden_dims[i+1]:
+                shortcut = nn.Linear(current_dim, hidden_dims[i+1])
+                self.shortcuts.append(shortcut)
+            else:
+                self.shortcuts.append(nn.Identity())
+            
+            current_dim = hidden_dims[i+1]
         
-        layers.append(nn.Linear(hidden_dims[-1], 1))
+        self.output = nn.Linear(current_dim, 1)
         
-        self.main = nn.Sequential(*layers)
+        self._initialize_weights()
     
-    def forward(self, input):
-        return self.main(input)
+    def forward(self, x):
+        x = nn.LeakyReLU(0.2)(self.fc1(x))
+        
+        for res_block, shortcut in zip(self.res_blocks, self.shortcuts):
+            residual = shortcut(x)  
+            x = res_block(x) + residual
+        
+        return self.output(x)
+    
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
 
 class UserDataset(Dataset):
     def __init__(self, data):
@@ -117,17 +183,15 @@ class ProfessionalGAN:
     def __init__(self, config):
         self.config = config
         self.device = config.DEVICE
-        
         self.g_losses = []
         self.d_losses = []
         self.gradient_penalties = []
         self.wasserstein_distances = []
-        
         self.scalers = {}
         self.encoders = {}
         self.feature_info = {}
         self.imputers = {}
-
+    
     def compute_gradient_penalty(self, real_samples, fake_samples):
         alpha = torch.rand(real_samples.size(0), 1).to(self.device)
         interpolates = (alpha * real_samples + ((1 - alpha) * fake_samples)).requires_grad_(True)
@@ -145,7 +209,7 @@ class ProfessionalGAN:
         gradients = gradients.view(gradients.size(0), -1)
         gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
         return gradient_penalty
-
+    
     def prepare_data(self, real_data):
         self.real_data = real_data.copy()
         processed_data = pd.DataFrame()
@@ -168,22 +232,13 @@ class ProfessionalGAN:
         for feature in categorical_features:
             encoder = LabelEncoder()
             encoded = encoder.fit_transform(real_data[feature].astype(str))
-            
-            n_classes = len(encoder.classes_)
-            if n_classes <= 50:
-                for i in range(n_classes):
-                    col_name = f"{feature}_{encoder.classes_[i]}"
-                    processed_data[col_name] = (encoded == i).astype(float)
-                
-                self.encoders[feature] = encoder
-                self.feature_info[feature] = {
-                    'type': 'categorical', 
-                    'encoder': encoder,
-                    'n_classes': n_classes
-                }
-            else:
-                processed_data[feature] = encoded
-                self.feature_info[feature] = {'type': 'categorical_high_cardinality'}
+            processed_data[feature] = encoded
+            self.encoders[feature] = encoder
+            self.feature_info[feature] = {
+                'type': 'categorical',
+                'encoder': encoder,
+                'classes': encoder.classes_.tolist()
+            }
         
         for feature in boolean_features:
             processed_data[feature] = real_data[feature].astype(float)
@@ -194,7 +249,7 @@ class ProfessionalGAN:
         
         if self.config.USE_WGAN_GP:
             self.generator = WGAN_GP_Generator(
-                self.config.LATENT_DIM, 
+                self.config.LATENT_DIM,
                 self.input_dim,
                 self.config.GENERATOR_LAYERS
             ).to(self.device)
@@ -204,12 +259,11 @@ class ProfessionalGAN:
             ).to(self.device)
         else:
             self.generator = AdvancedGenerator(
-                self.config.LATENT_DIM, 
+                self.config.LATENT_DIM,
                 self.input_dim,
                 self.config.GENERATOR_LAYERS,
                 self.config.DROPOUT_RATE
             ).to(self.device)
-            
             self.discriminator = AdvancedDiscriminator(
                 self.input_dim,
                 self.config.DISCRIMINATOR_LAYERS,
@@ -217,45 +271,27 @@ class ProfessionalGAN:
                 self.config.LEAKY_RELU_SLOPE
             ).to(self.device)
         
-        if self.config.USE_WGAN_GP:
-            self.optimizer_G = optim.Adam(
-                self.generator.parameters(), 
-                lr=self.config.LEARNING_RATE, 
-                betas=(self.config.BETA1, self.config.BETA2)
-            )
-            self.optimizer_D = optim.Adam(
-                self.discriminator.parameters(), 
-                lr=self.config.LEARNING_RATE, 
-                betas=(self.config.BETA1, self.config.BETA2)
-            )
-        else:
-            self.optimizer_G = optim.Adam(
-                self.generator.parameters(), 
-                lr=self.config.LEARNING_RATE, 
-                betas=(self.config.BETA1, self.config.BETA2)
-            )
-            self.optimizer_D = optim.Adam(
-                self.discriminator.parameters(), 
-                lr=self.config.LEARNING_RATE, 
-                betas=(self.config.BETA1, self.config.BETA2)
-            )
+        self.optimizer_G = optim.Adam(self.generator.parameters(), lr=self.config.LEARNING_RATE, betas=(0.0, 0.9))
+        self.optimizer_D = optim.Adam(self.discriminator.parameters(), lr=self.config.LEARNING_RATE, betas=(0.0, 0.9))
         
         self.criterion = nn.BCELoss()
         
-        print(f"Размерность данных: {self.input_dim}")
+        print(f"Размерность: {self.input_dim} (без one-hot)")
         print(f"Параметры генератора: {sum(p.numel() for p in self.generator.parameters()):,}")
         print(f"Параметры дискриминатора: {sum(p.numel() for p in self.discriminator.parameters()):,}")
         
         return torch.FloatTensor(processed_data.values).to(self.device)
-
+    
     def train_epoch_standard(self, dataloader, epoch):
         for i, real_batch in enumerate(dataloader):
             batch_size = real_batch.size(0)
             
-            real_labels = torch.ones(batch_size, 1).to(self.device)
-            fake_labels = torch.zeros(batch_size, 1).to(self.device)
+            real_labels = torch.ones(batch_size, 1).to(self.device) * 0.9  
+            fake_labels = torch.zeros(batch_size, 1).to(self.device) * 0.1 
             
+            # Обучение дискриминатора
             self.discriminator.zero_grad()
+            
             real_output = self.discriminator(real_batch)
             d_loss_real = self.criterion(real_output, real_labels)
             
@@ -268,7 +304,9 @@ class ProfessionalGAN:
             d_loss.backward()
             self.optimizer_D.step()
             
+            # Обучение генератора
             self.generator.zero_grad()
+            
             gen_output = self.discriminator(fake_batch)
             g_loss = self.criterion(gen_output, real_labels)
             g_loss.backward()
@@ -276,7 +314,7 @@ class ProfessionalGAN:
             
             self.g_losses.append(g_loss.item())
             self.d_losses.append(d_loss.item())
-
+    
     def train_epoch_wgan_gp(self, dataloader, epoch):
         for i, real_batch in enumerate(dataloader):
             batch_size = real_batch.size(0)
@@ -311,7 +349,7 @@ class ProfessionalGAN:
             
             wasserstein_distance = torch.mean(real_output) - torch.mean(fake_output)
             self.wasserstein_distances.append(wasserstein_distance.item())
-
+    
     def train(self, real_data, epochs=None):
         epochs = epochs or self.config.EPOCHS
         
@@ -332,7 +370,7 @@ class ProfessionalGAN:
             else:
                 self.train_epoch_standard(dataloader, epoch)
             
-            # Логирование прогресса
+            # Логирование
             if epoch % self.config.LOG_INTERVAL == 0:
                 current_g_loss = self.g_losses[-1] if self.g_losses else 0
                 current_d_loss = self.d_losses[-1] if self.d_losses else 0
@@ -345,11 +383,10 @@ class ProfessionalGAN:
                 else:
                     print(f"Epoch [{epoch}/{epochs}] G: {current_g_loss:.4f} D: {current_d_loss:.4f}")
             
-            # Валидация и мониторинг
+            # мониторинг
             if epoch % self.config.VALIDATION_INTERVAL == 0 and epoch > 0:
                 fid_score = self._validate_training(real_data, epoch)
                 
-                # Early stopping по FID
                 if fid_score < best_fid:
                     best_fid = fid_score
                     patience_counter = 0
@@ -361,48 +398,42 @@ class ProfessionalGAN:
                         print(f"🛑 Ранняя остановка на эпохе {epoch} (FID не улучшается)")
                         break
             
-            # Сохранение чекпоинтов
             if epoch % self.config.CHECKPOINT_INTERVAL == 0:
                 self._save_checkpoint(epoch)
             
-            # Генерация образцов
             if epoch % self.config.SAMPLE_INTERVAL == 0:
                 self._generate_samples(epoch, self.config.SAMPLE_SIZE)
         
         print("Обучение завершено!")
         self._save_checkpoint("final")
-
+    
     def _validate_training(self, real_data, epoch):
-        """Валидация обучения на текущей эпохе"""
         try:
-            # Генерируем данные для валидации
             synthetic_val = self.generate(5000)
             
-            # Вычисляем FID score
             from scripts.evaluator import GANEvaluator
-            evaluator = GANEvaluator(real_data.sample(5000), synthetic_val)
+            evaluator = GANEvaluator(real_data.sample(5000), synthetic_val, scalers=self.scalers)
             fid_score = evaluator.calculate_fid_score()
             
-            # Проверяем базовые статистики
             numerical_features = real_data.select_dtypes(include=[np.number]).columns
             numerical_features = [f for f in numerical_features if f in synthetic_val.columns]
-            
             stats_ok = 0
+            
             for feature in numerical_features[:5]:
                 real_mean = real_data[feature].mean()
                 synth_mean = synthetic_val[feature].mean()
                 mean_diff = abs(real_mean - synth_mean) / real_mean
+                
                 if mean_diff < 0.2:  # Разница менее 20%
                     stats_ok += 1
             
-            print(f"   Validation Epoch {epoch}: FID={fid_score:.1f}, Stats: {stats_ok}/5 OK")
-            
+            print(f" Validation Epoch {epoch}: FID={fid_score:.1f}, Stats: {stats_ok}/5 OK")
             return fid_score
-            
+        
         except Exception as e:
-            print(f"   Validation error: {e}")
+            print(f" Validation error: {e}")
             return float('inf')
-
+    
     def _save_checkpoint(self, epoch):
         torch.save({
             'epoch': epoch,
@@ -413,68 +444,104 @@ class ProfessionalGAN:
             'g_losses': self.g_losses,
             'd_losses': self.d_losses,
             'feature_info': self.feature_info,
-            'processed_columns': self.processed_columns
+            'processed_columns': self.processed_columns,
+            'scalers': self.scalers
         }, f'gan_checkpoint_epoch_{epoch}.pth')
-
+    
     def _generate_samples(self, epoch, n_samples):
         self.generator.eval()
         with torch.no_grad():
             z = torch.randn(n_samples, self.config.LATENT_DIM).to(self.device)
             synthetic_data = self.generator(z).cpu().numpy()
-        
-        synthetic_df = self._postprocess(synthetic_data)
-        synthetic_df.to_csv(f'samples_epoch_{epoch}.csv', index=False)
+            synthetic_df = self._postprocess(synthetic_data)
+            synthetic_df.to_csv(f'samples_epoch_{epoch}.csv', index=False)
         self.generator.train()
-
+    
     def _postprocess(self, synthetic_data):
         synthetic_df = pd.DataFrame(synthetic_data, columns=self.processed_columns)
         result_df = pd.DataFrame()
         
-        for feature, info in self.feature_info.items():
-            if info['type'] == 'numerical':
-                scaler = info['scaler']
-                result_df[feature] = scaler.inverse_transform(
-                    synthetic_df[feature].values.reshape(-1, 1)
-                ).flatten()
-                
-                if feature in self.real_data.columns and self.real_data[feature].dtype == 'int64':
-                    result_df[feature] = result_df[feature].round().astype(int)
-                    # Ограничиваем значения разумными пределами
-                    result_df[feature] = np.clip(result_df[feature], 
-                                               self.real_data[feature].min(), 
-                                               self.real_data[feature].max())
+        device_classes = self.feature_info['device']['classes']
+        device_indices = np.random.randint(0, len(device_classes), len(synthetic_df))
+        result_df['device'] = [device_classes[idx] for idx in device_indices]
+        
+        for i, device in enumerate(result_df['device']):
+            if device == 'Mobile':
+                os_options = ['iOS', 'Android']
+            elif device == 'Desktop':
+                os_options = ['Windows', 'macOS'] 
+            else:  # Tablet
+                os_options = ['iOS', 'Android']
             
-            elif info['type'] == 'categorical':
-                encoder = info['encoder']
-                feature_cols = [col for col in self.processed_columns if col.startswith(feature + "_")]
-                
-                if feature_cols:
-                    probs = synthetic_df[feature_cols].values
-                    predicted_classes = np.argmax(probs, axis=1)
-                    
-                    # ИСПРАВЛЕНИЕ: безопасное преобразование
-                    valid_mask = predicted_classes < len(encoder.classes_)
-                    if not np.all(valid_mask):
-                        # Заменяем невалидные значения на наиболее вероятные
-                        invalid_indices = ~valid_mask
-                        predicted_classes[invalid_indices] = np.argmax(probs[invalid_indices], axis=1) % len(encoder.classes_)
-                    
-                    result_df[feature] = encoder.inverse_transform(predicted_classes)
+            result_df.at[i, 'os'] = np.random.choice(os_options)
+        
+        for i, (device, os) in enumerate(zip(result_df['device'], result_df['os'])):
+            if device == 'Mobile':
+                if os == 'iOS':
+                    browser_options = ['Safari Mobile', 'Chrome Mobile']
+                else:  
+                    browser_options = ['Chrome Mobile', 'Firefox Mobile', 'Samsung Internet']
+            elif device == 'Desktop':
+                if os == 'Windows':
+                    browser_options = ['Chrome', 'Firefox', 'Edge', 'Safari']
+                else: 
+                    browser_options = ['Safari', 'Chrome', 'Firefox']
+            else:  
+                if os == 'iOS':
+                    browser_options = ['Safari Mobile', 'Chrome Mobile']
+                else:  
+                    browser_options = ['Chrome Mobile', 'Firefox Mobile', 'Samsung Internet']
             
-            elif info['type'] == 'boolean':
-                result_df[feature] = (synthetic_df[feature] > 0.5).astype(bool)
+            result_df.at[i, 'browser'] = np.random.choice(browser_options)
+        
+
+        other_categorical = [f for f in self.feature_info.keys() 
+                        if self.feature_info[f]['type'] == 'categorical'
+                        and f not in ['device', 'os', 'browser']]
+        
+        for feature in other_categorical:
+            classes = self.feature_info[feature]['classes']
+            values = np.random.randint(0, len(classes), len(synthetic_df))
+            result_df[feature] = [classes[idx] for idx in values]
+        
+        numerical_features = [f for f in self.feature_info.keys() 
+                            if self.feature_info[f]['type'] == 'numerical']
+        
+        for feature in numerical_features:
+            scaler = self.feature_info[feature]['scaler']
+            values = scaler.inverse_transform(synthetic_df[feature].values.reshape(-1, 1)).flatten()
+            
+            if feature in ['age', 'previous_purchases', 'pages_per_session', 'visits_per_week']:
+                values = np.clip(values.round().astype(int), 0, None)
+            if feature == 'age':
+                values = np.clip(values, 18, 70)
+            if feature == 'total_spent':
+                values = np.clip(values, 0, 300000)
+            if feature == 'income':
+                values = np.clip(values, 20000, 200000)
+            
+            result_df[feature] = values
+        
+        boolean_features = [f for f in self.feature_info.keys() 
+                        if self.feature_info[f]['type'] == 'boolean']
+        
+        for feature in boolean_features:
+            result_df[feature] = (synthetic_df[feature] > 0.5)
+        
+        result_df['user_id'] = np.arange(len(result_df))
+        
+        cols = ['user_id'] + [col for col in result_df.columns if col != 'user_id']
+        result_df = result_df[cols]
         
         return result_df
-
+    
     def generate(self, n_samples=10000):
         self.generator.eval()
-        
         with torch.no_grad():
             z = torch.randn(n_samples, self.config.LATENT_DIM).to(self.device)
             synthetic_data = self.generator(z).cpu().numpy()
-        
-        return self._postprocess(synthetic_data)
-
+            return self._postprocess(synthetic_data)
+    
     def load_checkpoint(self, checkpoint_path):
         checkpoint = torch.load(checkpoint_path)
         self.generator.load_state_dict(checkpoint['generator_state_dict'])
@@ -485,7 +552,5 @@ class ProfessionalGAN:
         self.d_losses = checkpoint['d_losses']
         self.feature_info = checkpoint['feature_info']
         self.processed_columns = checkpoint['processed_columns']
-        
+        self.scalers = checkpoint.get('scalers', {})
         print(f"Загружена модель из эпохи {checkpoint['epoch']}")
-        
-        
