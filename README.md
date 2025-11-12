@@ -34,7 +34,7 @@ cd adaptive_ab_testing_platform
 pip install -r requirements.txt
 ```
 
-3. Запуск проекта:
+3. Запуск тренировки GAN при необходимости:
 
 ```
 cd gan
