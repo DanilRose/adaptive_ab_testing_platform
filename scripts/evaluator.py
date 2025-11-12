@@ -16,10 +16,6 @@ class GANEvaluator:
         self.scalers = scalers 
     
     def evaluate_quality(self):
-        print("\n" + "="*60)
-        print("РАСШИРЕННАЯ ОЦЕНКА КАЧЕСТВА GAN")
-        print("="*60)
-        
         numerical_features = self.real_data.select_dtypes(include=[np.number]).columns
         numerical_features = [f for f in numerical_features if f in self.synthetic_data.columns]
         
@@ -56,27 +52,15 @@ class GANEvaluator:
         diversity_score = self._calculate_diversity()
         fid_score = self.calculate_fid_score()
         
-        print(f"\n📊 СТАТИСТИЧЕСКИЕ ТЕСТЫ (первые 5 признаков):")
-        for i, (feature, results) in enumerate(list(stats_results.items())[:5]):
-            status_t = "✅" if results['t_test_pvalue'] > 0.05 else "❌"
-            status_ks = "✅" if results['ks_test_pvalue'] > 0.05 else "❌" 
-            status_d = "✅" if abs(results['cohen_d']) < 0.2 else "❌"
-            
-            print(f"  {feature}:")
-            print(f"    T-тест: p={results['t_test_pvalue']:.4f} {status_t}")
-            print(f"    KS-тест: p={results['ks_test_pvalue']:.4f} {status_ks}")
-            print(f"    Cohen's d: {results['cohen_d']:.3f} {status_d}")
+        print(f"FID: {fid_score:.2f}")
+        print(f"KS среднее: {np.mean([stats.ks_2samp(self.real_data[f], self.synthetic_data[f])[0] for f in numerical_features[:5]]):.4f}")
+        print(f"Разница корреляций: {corr_diff:.4f}")
         
-        print(f"\n📈 КОРРЕЛЯЦИОННЫЙ АНАЛИЗ:")
-        print(f"  Средняя разница в корреляциях: {corr_diff:.4f}")
-        print(f"  {'✅ Отлично' if corr_diff < 0.1 else '⚠️  Хорошо' if corr_diff < 0.2 else '❌ Требует улучшения'}")
-        
-        print(f"\n🎯 ОБЩАЯ ОЦЕНКА:")
-        print(f"  Разнообразие данных: {diversity_score:.3f}")
-        print(f"  FID Score: {fid_score:.2f}")
-        print(f"  Размер реальных данных: {len(self.real_data):,}")
-        print(f"  Размер синтетических данных: {len(self.synthetic_data):,}")
-        print(f"  Общих признаков: {len(common_numerical)}")
+        for feature in list(stats_results.keys())[:3]:
+            real_mean = stats_results[feature]['mean_real']
+            synth_mean = stats_results[feature]['mean_synth']
+            diff_pct = abs(real_mean - synth_mean) / real_mean * 100
+            print(f"{feature}: {real_mean:.1f} → {synth_mean:.1f} (Δ {diff_pct:.1f}%)")
         
         return {
             'statistical_tests': stats_results,
@@ -142,7 +126,6 @@ class GANEvaluator:
             return fid
             
         except Exception as e:
-            print(f"Ошибка при вычислении FID: {e}")
             return float('inf')
 
     def plot_distributions(self, features, n_cols=3, save_path='distribution_comparison.png'):
@@ -160,119 +143,15 @@ class GANEvaluator:
                 if self.real_data[feature].dtype in ['int64', 'float64']:
                     axes[i].hist(self.real_data[feature], bins=30, alpha=0.7, label='Real', density=True, color='blue')
                     axes[i].hist(self.synthetic_data[feature], bins=30, alpha=0.7, label='Synthetic', density=True, color='orange')
-                    axes[i].set_title(f'Distribution of {feature}')
-                    axes[i].legend()
-                else:
-                    real_counts = self.real_data[feature].value_counts().head(10)
-                    synth_counts = self.synthetic_data[feature].value_counts()
-                    all_categories = list(real_counts.index)
-                    for cat in synth_counts.index:
-                        if cat not in all_categories and len(all_categories) < 10:
-                            all_categories.append(cat)
-                    
-                    real_values = [real_counts.get(cat, 0) for cat in all_categories]
-                    synth_values = [synth_counts.get(cat, 0) for cat in all_categories]
-                    
-                    x = np.arange(len(all_categories))
-                    width = 0.35
-                    
-                    axes[i].bar(x - width/2, real_values, width, label='Real', alpha=0.7, color='blue')
-                    axes[i].bar(x + width/2, synth_values, width, label='Synthetic', alpha=0.7, color='orange')
-                    axes[i].set_xticks(x)
-                    axes[i].set_xticklabels(all_categories, rotation=45, ha='right')
-                    axes[i].set_title(f'Distribution of {feature}')
+                    axes[i].set_title(f'{feature}')
                     axes[i].legend()
         
-        # Скрываем пустые subplots
         for i in range(n_features, len(axes)):
             axes[i].set_visible(False)
         
         plt.tight_layout()
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.show()
-        
-    def calculate_data_quality_metrics(self):
-        metrics = {}
-        
-        common_features = set(self.real_data.columns) & set(self.synthetic_data.columns)
-        metrics['feature_overlap'] = len(common_features) / len(self.real_data.columns)
-        
-        numerical_features = self.real_data.select_dtypes(include=[np.number]).columns
-        numerical_features = [f for f in numerical_features if f in common_features]
-        
-        statistical_metrics = []
-        for feature in numerical_features[:10]:
-            real_values = self.real_data[feature]
-            synth_values = self.synthetic_data[feature]
-            
-            ks_stat, ks_pvalue = stats.ks_2samp(real_values, synth_values)
-            mape = np.mean(np.abs((real_values.mean() - synth_values.mean()) / real_values.mean()))
-            
-            statistical_metrics.append({
-                'feature': feature,
-                'ks_pvalue': ks_pvalue,
-                'mape': mape
-            })
-        
-        metrics['statistical_metrics'] = statistical_metrics
-        metrics['avg_ks_pvalue'] = np.mean([m['ks_pvalue'] for m in statistical_metrics])
-        metrics['avg_mape'] = np.mean([m['mape'] for m in statistical_metrics])
-        
-        return metrics
-
-    def generate_quality_report(self, save_path='gan_quality_report.txt'):
-        report = self.evaluate_quality()
-        metrics = self.calculate_data_quality_metrics()
-        
-        with open(save_path, 'w', encoding='utf-8') as f:
-            f.write("ОТЧЕТ О КАЧЕСТВЕ GAN\n")
-            f.write("="*50 + "\n\n")
-            
-            f.write("ОБЩАЯ ИНФОРМАЦИЯ:\n")
-            f.write(f"Реальные данные: {len(self.real_data):,} записей\n")
-            f.write(f"Синтетические данные: {len(self.synthetic_data):,} записей\n")
-            f.write(f"Общие признаки: {len(set(self.real_data.columns) & set(self.synthetic_data.columns))}\n\n")
-            
-            f.write("СТАТИСТИЧЕСКИЕ МЕТРИКИ:\n")
-            f.write(f"Средний p-value KS теста: {metrics['avg_ks_pvalue']:.4f}\n")
-            f.write(f"Средняя MAPE: {metrics['avg_mape']:.4f}\n")
-            f.write(f"FID Score: {report['fid_score']:.2f}\n")
-            f.write(f"Разнообразие: {report['diversity_score']:.3f}\n\n")
-            
-            f.write("ОЦЕНКА КАЧЕСТВА:\n")
-            if report['fid_score'] < 100 and metrics['avg_ks_pvalue'] > 0.05:
-                f.write("✅ ОТЛИЧНО - данные высокого качества\n")
-            elif report['fid_score'] < 500 and metrics['avg_ks_pvalue'] > 0.01:
-                f.write("⚠️  ХОРОШО - данные приемлемого качества\n")
-            else:
-                f.write("❌ ТРЕБУЕТ УЛУЧШЕНИЯ - низкое качество данных\n")
-        
-        print(f"Отчет сохранен в {save_path}")
-
-    def calculate_ks_statistics(self):
-        numerical_features = self.real_data.select_dtypes(include=[np.number]).columns
-        numerical_features = [f for f in numerical_features if f in self.synthetic_data.columns]
-        
-        ks_stats = {}
-        for feature in numerical_features:
-            real_values = self.real_data[feature]
-            synth_values = self.synthetic_data[feature]
-            ks_stat, _ = stats.ks_2samp(real_values, synth_values)
-            ks_stats[feature] = ks_stat
-        
-        return ks_stats
-
-    def calculate_correlation_difference(self):
-        numerical_features = self.real_data.select_dtypes(include=[np.number]).columns
-        numerical_features = [f for f in numerical_features if f in self.synthetic_data.columns]
-        
-        if len(numerical_features) >= 5:
-            real_corr = self.real_data[numerical_features[:5]].corr()
-            synth_corr = self.synthetic_data[numerical_features[:5]].corr()
-            corr_diff = (real_corr - synth_corr).abs().mean().mean()
-            return corr_diff
-        else:
-            return float('inf')
 
 class TrainingVisualizer:
     @staticmethod
