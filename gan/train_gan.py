@@ -3,7 +3,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from gan.config import GANConfig
-from gan.models import ProfessionalGAN
+from gan.models import GAN
 from traffic_generator.data_generator import RealisticDataGenerator
 from scripts.evaluator import GANEvaluator
 import pandas as pd
@@ -18,7 +18,7 @@ def main():
     print(f"   total_spent: {real_data['total_spent'].min():.0f} — {real_data['total_spent'].max():.0f}")
 
     config = GANConfig()
-    gan = ProfessionalGAN(config)
+    gan = GAN(config)
 
     print(f"   Режим: {'WGAN-GP' if config.USE_WGAN_GP else 'Standard GAN'}")
     print(f"   Эпох: {config.EPOCHS}")

@@ -10,9 +10,9 @@ from sklearn.impute import SimpleImputer
 import warnings
 warnings.filterwarnings('ignore')
 
-class AdvancedGenerator(nn.Module):
+class Generator(nn.Module):
     def __init__(self, latent_dim, output_dim, hidden_dims, dropout_rate):
-        super(AdvancedGenerator, self).__init__()
+        super(Generator, self).__init__()
         layers = []
         input_dim = latent_dim
         
@@ -43,9 +43,9 @@ class AdvancedGenerator(nn.Module):
     def forward(self, z):
         return self.network(z)
 
-class AdvancedDiscriminator(nn.Module):
+class Discriminator(nn.Module):
     def __init__(self, input_dim, hidden_dims, dropout_rate, leaky_slope):
-        super(AdvancedDiscriminator, self).__init__()
+        super(Discriminator, self).__init__()
         layers = []
         current_dim = input_dim
         
@@ -179,7 +179,7 @@ class UserDataset(Dataset):
     def __getitem__(self, idx):
         return self.data[idx]
 
-class ProfessionalGAN:
+class GAN:
     def __init__(self, config):
         self.config = config
         self.device = config.DEVICE
@@ -258,13 +258,13 @@ class ProfessionalGAN:
                 self.config.DISCRIMINATOR_LAYERS
             ).to(self.device)
         else:
-            self.generator = AdvancedGenerator(
+            self.generator = Generator(
                 self.config.LATENT_DIM,
                 self.input_dim,
                 self.config.GENERATOR_LAYERS,
                 self.config.DROPOUT_RATE
             ).to(self.device)
-            self.discriminator = AdvancedDiscriminator(
+            self.discriminator = Discriminator(
                 self.input_dim,
                 self.config.DISCRIMINATOR_LAYERS,
                 self.config.DROPOUT_RATE,
@@ -395,7 +395,6 @@ class ProfessionalGAN:
                 else:
                     patience_counter += 1
                     if patience_counter >= max_patience:
-                        print(f"🛑 Ранняя остановка на эпохе {epoch} (FID не улучшается)")
                         break
             
             if epoch % self.config.CHECKPOINT_INTERVAL == 0:
@@ -424,7 +423,7 @@ class ProfessionalGAN:
                 synth_mean = synthetic_val[feature].mean()
                 mean_diff = abs(real_mean - synth_mean) / real_mean
                 
-                if mean_diff < 0.2:  # Разница менее 20%
+                if mean_diff < 0.2:  
                     stats_ok += 1
             
             print(f" Validation Epoch {epoch}: FID={fid_score:.1f}, Stats: {stats_ok}/5 OK")
