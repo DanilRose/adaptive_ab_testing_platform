@@ -1,24 +1,14 @@
-# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Virtual environment
 venv/
 env/
-
-# IDE
 .vscode/
 .idea/
-
-# Database
 *.db
 *.sqlite3
-
-# Environment variables
 .env
 .env.local
-
-# Logs
 *.log
 logs/
+node_modules
