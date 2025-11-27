@@ -11,10 +11,12 @@ from pydantic import BaseModel
 from backend.services.traffic_generator.data_generator import RealisticDataGenerator
 from backend.services.gan_integration import gan_service
 from backend.services.evaluator import GANEvaluator
+from backend.ab_testing.managers import AdaptiveABTestingPlatform
+
+platform = AdaptiveABTestingPlatform() 
 
 router = APIRouter(prefix="/api/v1/data", tags=["Data Generation"])
 
-# Инициализация компонентов
 data_generator = RealisticDataGenerator()
 
 class DataGenerationRequest(BaseModel):
@@ -194,3 +196,19 @@ async def load_gan_checkpoint(request: LoadCheckpointRequest):
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка загрузки модели: {str(e)}")
+    
+@router.post("/run-ab-test-simulation", summary="Запустить симуляцию A/B теста")
+async def run_ab_test_simulation(request: dict):
+    try:
+        from backend.services.ab_test_simulator import ABTestSimulator
+        from backend.api.routes.tests import platform 
+        
+        simulator = ABTestSimulator(platform)
+        simulator.simulate_test(
+            request['test_id'], 
+            None,
+            request.get('user_count', 1000)
+        )
+        return {"status": "simulation_started", "message": "Симуляция A/B теста запущена"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка симуляции: {str(e)}")

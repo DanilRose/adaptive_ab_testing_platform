@@ -50,30 +50,45 @@ class ThompsonSamplingBandit(BanditAlgorithm):
         self.successes: Dict[str, Dict[str, float]] = {}
         self.failures: Dict[str, Dict[str, float]] = {}
     
+    def _initialize_test(self, test_id: str, variants: List[str]):
+        """Инициализирует тест с заданными вариантами"""
+        if test_id not in self.successes:
+            self.successes[test_id] = {}
+            self.failures[test_id] = {}
+        
+        for variant in variants:
+            if variant not in self.successes[test_id]:
+                # Начальные значения для бета-распределения
+                self.successes[test_id][variant] = 1.0
+                self.failures[test_id][variant] = 1.0
+    
     def select_variant(self, test_id: str, context: Optional[Dict] = None) -> str:
         if test_id not in self.successes:
-            raise ValueError(f"Test {test_id} not initialized")
+            raise ValueError(f"Тест {test_id} не инициализирован")
         
         samples = {}
         for variant in self.successes[test_id].keys():
             alpha = self.successes[test_id][variant]
             beta = self.failures[test_id][variant]
             samples[variant] = np.random.beta(alpha, beta)
+            print(f"   {variant}: alpha={alpha}, beta={beta}, выборка={samples[variant]:.3f}")
         
-        return max(samples, key=samples.get)
+        selected = max(samples, key=samples.get)
+        print(f"   ВЫБРАНО: {selected}")
+        return selected
     
     def update(self, test_id: str, variant: str, reward: float):
         if test_id not in self.successes:
             self._initialize_test(test_id, [variant])
         
-        if reward > 0:
-            self.successes[test_id][variant] += reward
-        else:
-            self.failures[test_id][variant] += abs(reward)
-    
-    def _initialize_test(self, test_id: str, variants: List[str]):
-        self.successes[test_id] = {v: 1.0 for v in variants}
-        self.failures[test_id] = {v: 1.0 for v in variants}
+        if variant not in self.successes[test_id]:
+            self.successes[test_id][variant] = 1.0
+            self.failures[test_id][variant] = 1.0
+        normalized_reward = min(1.0, max(0.0, reward / 1000.0))
+
+        self.successes[test_id][variant] += normalized_reward
+        self.failures[test_id][variant] += (1.0 - normalized_reward)
+
 
 class StatisticalTest:
     @staticmethod
@@ -126,7 +141,7 @@ class AdaptiveABTest:
     def __init__(self, config: TestConfig):
         self.config = config
         self.bandit = ThompsonSamplingBandit()
-        self.data: Dict[str, List[float]] = {v: [] for v in config.variants}
+        self.data: Dict[str, List[float]] = {v: [] for v in config.variants}  # ← ЗДЕСЬ МОЖЕТ БЫТЬ ОШИБКА
         self._initialize_bandit()
     
     def _initialize_bandit(self):
@@ -173,7 +188,6 @@ class AdaptiveABTest:
             
             results[variant] = TestResult(
                 variant=variant,
-                sample_size=sample_size,
                 mean=mean,
                 std=std,
                 confidence_interval=(float(ci_low), float(ci_high))
@@ -191,18 +205,39 @@ class AdaptiveABTest:
         for variant in self.config.variants[1:]:
             variant_data = np.array(self.data[variant])
             
-            if len(control_data) > 0 and len(variant_data) > 0:
-                if self.config.metric_type == MetricType.BINARY:
-                    control_success = np.sum(control_data)
-                    variant_success = np.sum(variant_data)
-                    _, p_value = StatisticalTest.chi_square_test(
-                        int(control_success), len(control_data),
-                        int(variant_success), len(variant_data)
-                    )
-                else:
-                    _, p_value = StatisticalTest.t_test(control_data, variant_data)
+            if len(control_data) < 2 or len(variant_data) < 2:
+                p_values[variant] = 1.0
+                continue
                 
-                p_values[variant] = p_value
+            if self.config.metric_type == MetricType.BINARY:
+                control_success = np.sum(control_data)
+                variant_success = np.sum(variant_data)
+                control_total = len(control_data)
+                variant_total = len(variant_data)
+                
+                expected_control_success = (control_success + variant_success) * control_total / (control_total + variant_total)
+                expected_variant_success = (control_success + variant_success) * variant_total / (control_total + variant_total)
+                expected_control_fail = (control_total + variant_total - control_success - variant_success) * control_total / (control_total + variant_total)
+                expected_variant_fail = (control_total + variant_total - control_success - variant_success) * variant_total / (control_total + variant_total)
+                
+                if min(expected_control_success, expected_variant_success, expected_control_fail, expected_variant_fail) < 5:
+                    p_values[variant] = 1.0 
+                    continue
+                
+                try:
+                    _, p_value = StatisticalTest.chi_square_test(
+                        int(control_success), control_total,
+                        int(variant_success), variant_total
+                    )
+                    p_values[variant] = p_value
+                except ValueError:
+                    p_values[variant] = 1.0
+            else:
+                try:
+                    _, p_value = StatisticalTest.t_test(control_data, variant_data)
+                    p_values[variant] = p_value
+                except:
+                    p_values[variant] = 1.0
         
         return p_values
 
@@ -214,6 +249,8 @@ class ABTestManager:
     def create_test(self, config: TestConfig) -> None:
         if config.test_id in self.active_tests:
             raise ValueError(f"Test {config.test_id} already exists")
+        if not isinstance(config.variants, list):
+            raise ValueError(f"Variants must be a list, got {type(config.variants)}")
         
         self.test_configs[config.test_id] = config
         self.active_tests[config.test_id] = AdaptiveABTest(config)
@@ -244,13 +281,14 @@ class ABTestManager:
         if test_id not in self.active_tests:
             raise ValueError(f"Test {test_id} not found")
         
+        test = self.active_tests[test_id]  
         results, p_values = self.get_test_results(test_id)
         
         summary = {
             'test_id': test_id,
             'results': results,
             'p_values': p_values,
-            'total_observations': sum(len(test.data[v]) for v in self.test_configs[test_id].variants)
+            'total_observations': sum(len(test.data[v]) for v in self.test_configs[test_id].variants)  
         }
         
         del self.active_tests[test_id]

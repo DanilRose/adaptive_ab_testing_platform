@@ -11,9 +11,19 @@ export const TestCreator: React.FC = () => {
   const onFinish = async (values: any) => {
     setLoading(true);
     try {
+      // Правильно обрабатываем variants
+      let variantsArray: string[];
+      if (typeof values.variants === 'string') {
+        variantsArray = values.variants.split(',').map((v: string) => v.trim());
+      } else if (Array.isArray(values.variants)) {
+        variantsArray = values.variants;
+      } else {
+        throw new Error('Variants must be string or array');
+      }
+
       const response = await abTestAPI.createTest({
         test_name: values.testName,
-        variants: values.variants.split(',').map((v: string) => v.trim()),
+        variants: variantsArray,  // ← УЖЕ МАССИВ
         primary_metric: values.primaryMetric,
         metric_type: values.metricType,
         description: values.description,

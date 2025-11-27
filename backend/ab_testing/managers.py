@@ -67,7 +67,16 @@ class TestRegistry:
     
     def register_test(self, config: TestConfig, created_by: str, description: str = ""):
         test_info = {
-            'config': asdict(config),
+            'config': {
+                'test_id': config.test_id,
+                'variants': config.variants,
+                'primary_metric': config.primary_metric,
+                'metric_type': config.metric_type.value if hasattr(config.metric_type, 'value') else str(config.metric_type),
+                'sample_size': config.sample_size,
+                'confidence_level': config.confidence_level,
+                'power': config.power,
+                'min_effect_size': config.min_effect_size
+            },
             'created_by': created_by,
             'created_at': datetime.now(),
             'description': description,
@@ -106,20 +115,27 @@ class AdaptiveABTestingPlatform:
         self.metric_definitions: Dict[str, MetricType] = {}
     
     def create_ab_test(self, 
-                      test_id: str,
-                      variants: List[str],
-                      primary_metric: str,
-                      metric_type: MetricType,
-                      created_by: str,
-                      description: str = "",
-                      **kwargs) -> str:
+                    test_id: str,
+                    variants: List[str],
+                    primary_metric: str,
+                    metric_type: MetricType,
+                    created_by: str,
+                    description: str = "",
+                    sample_size: Optional[int] = None,
+                    confidence_level: float = 0.95,
+                    power: float = 0.8,
+                    min_effect_size: float = 0.1) -> str:
+        
         
         config = TestConfig(
             test_id=test_id,
             variants=variants,
             primary_metric=primary_metric,
             metric_type=metric_type,
-            **kwargs
+            sample_size=sample_size,
+            confidence_level=confidence_level,
+            power=power,
+            min_effect_size=min_effect_size
         )
         
         self.test_manager.create_test(config)

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 import uuid
 
 from backend.ab_testing.core import MetricType, TestConfig
@@ -10,20 +10,25 @@ from backend.ab_testing.managers import AdaptiveABTestingPlatform
 
 router = APIRouter(prefix="/api/v1/tests", tags=["A/B Tests"])
 
-# Инициализация платформы
 platform = AdaptiveABTestingPlatform()
 
-# Pydantic модели для запросов и ответов
 class TestCreateRequest(BaseModel):
     test_name: str = Field(..., description="Название теста")
     variants: List[str] = Field(..., description="Варианты теста (A, B, C...)")
     primary_metric: str = Field(..., description="Основная метрика")
-    metric_type: MetricType = Field(..., description="Тип метрики")
+    metric_type: str = Field(..., description="Тип метрики")
     description: Optional[str] = Field(None, description="Описание теста")
     sample_size: Optional[int] = Field(None, description="Размер выборки")
     confidence_level: float = Field(0.95, ge=0.8, le=0.99, description="Уровень доверия")
     power: float = Field(0.8, ge=0.5, le=0.95, description="Мощность теста")
     min_effect_size: float = Field(0.1, ge=0.01, le=1.0, description="Минимальный размер эффекта")
+    
+    @validator('variants')
+    def validate_variants(cls, v):
+        print(f"🔍 DEBUG Pydantic validator: variants={v}, type={type(v)}")
+        if not isinstance(v, list):
+            raise ValueError(f"Variants must be list, got {type(v)}")
+        return v
 
 class UserAssignmentRequest(BaseModel):
     user_id: str = Field(..., description="ID пользователя")
@@ -42,29 +47,30 @@ class TestStopRequest(BaseModel):
     reason: str = Field("Manual stop", description="Причина остановки")
 
 @router.post("/", summary="Создать новый A/B тест")
-async def create_test(request: TestCreateRequest):
+async def create_test(request: dict):
     try:
         test_id = f"test_{uuid.uuid4().hex[:8]}"
         
-        platform.create_ab_test(
+        config = TestConfig(
             test_id=test_id,
-            variants=request.variants,
-            primary_metric=request.primary_metric,
-            metric_type=request.metric_type,
-            created_by="api_user",  # В реальном приложении брать из аутентификации
-            description=request.description,
-            sample_size=request.sample_size,
-            confidence_level=request.confidence_level,
-            power=request.power,
-            min_effect_size=request.min_effect_size
+            variants=request.get('variants'),
+            primary_metric=request.get('primary_metric'),
+            metric_type=MetricType(request.get('metric_type')),
+            sample_size=request.get('sample_size'),
+            confidence_level=request.get('confidence_level', 0.95),
+            power=request.get('power', 0.8),
+            min_effect_size=request.get('min_effect_size', 0.1)
         )
-        
+        platform.test_registry.register_test(config, "api_user", request.get('description', ''))
+        platform.test_manager.create_test(config)   
         return {
             "test_id": test_id,
-            "status": "created",
-            "message": f"A/B тест '{request.test_name}' успешно создан"
+            "status": "created", 
+            "message": f"A/B тест '{request.get('test_name')}' успешно создан"
         }
     except Exception as e:
+        import traceback
+        print(f"❌ DEBUG: Full traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/{test_id}/assign", summary="Назначить пользователя в тест")
