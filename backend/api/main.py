@@ -1,12 +1,15 @@
 # backend/api/main.py
 
+import os
+import logging
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Optional
+
+import uvicorn
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from contextlib import asynccontextmanager
-import uvicorn
-import logging
-from typing import Optional
 
 from backend.api.routes.tests import router as tests_router
 from backend.api.routes.data import router as data_router
@@ -32,9 +35,10 @@ app = FastAPI(
 )
 
 # CORS middleware
+cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://frontend:80").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # В продакшене заменить на конкретные домены
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -63,7 +67,7 @@ async def root():
 async def health_check():
     return {
         "status": "healthy",
-        "timestamp": "2024-12-15T14:30:00Z",  # В реальном приложении использовать datetime.now()
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "services": {
             "api": "ok",
             "ab_testing": "ok",
@@ -76,20 +80,19 @@ async def api_status():
     return {
         "api_version": "1.0.0",
         "status": "operational",
-        "active_tests": 0,  # Будет подключено к менеджеру тестов
-        "total_requests": 0,  # Будет считаться в middleware
-        "uptime": "0 days 0 hours 0 minutes"  # Будет рассчитываться
+        "active_tests": 0,
+        "total_requests": 0,
+        "uptime": "0 days 0 hours 0 minutes"
     }
 
 # Глобальный обработчик ошибок
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    logger.error(f"Global error handler: {str(exc)}")
+    logger.error(f"Global error handler: {str(exc)}", exc_info=True)
     return JSONResponse(
         status_code=500,
         content={
             "error": "Internal server error",
-            "message": str(exc),
             "request_id": "mock-request-id"  # В реальном приложении генерировать ID
         }
     )

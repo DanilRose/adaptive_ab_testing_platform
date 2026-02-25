@@ -1,0 +1,86 @@
+# VCS 
+.git
+.gitignore
+.gitattributes
+
+# Документация 
+README.md
+*.md
+docs/
+
+# Python артефакты 
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+.Python
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Python окружения 
+env/
+venv/
+.venv/
+.env
+.env.*
+!.env.example
+
+# Node.js 
+node_modules/
+**/node_modules/
+frontend/.vite/
+frontend/dist/
+frontend/build/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Тесты и покрытие 
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE 
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Логи 
+*.log
+backend/logs/
+logs/
+
+# БД 
+*.sqlite3
+*.db
+
+# Архивы 
+*.tar.gz
+*.zip
+*.rar
+
+# Docker файлы (не нужны внутри контейнера)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# GAN чекпоинты (монтируются через volume — не копировать в образ!) 
+backend/gan/checkpoints/*.pth
+backend/gan/checkpoints/*.pt
+backend/gan/checkpoints/*.ckpt
+
+# Временные файлы 
+*.tmp
+*.temp
+.cache/

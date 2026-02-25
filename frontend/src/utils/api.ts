@@ -1,7 +1,7 @@
 // frontend/src/utils/api.ts
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1';
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -38,53 +38,45 @@ export const resultsAPI = {
 };
 
 
-// ДЕБАГ ДЛЯ ВСЕХ ЗАПРОСОВ - ДОБАВЬ В КОНЕЦ ФАЙЛА
-api.interceptors.request.use(request => {
-  console.log(`🚀 API REQUEST: ${request.method?.toUpperCase()} ${request.url}`, {
-    data: request.data,
-    params: request.params,
-    headers: request.headers
+// Debug-утилиты 
+if (import.meta.env.DEV) {
+  api.interceptors.request.use(request => {
+    console.log(`🚀 API REQUEST: ${request.method?.toUpperCase()} ${request.url}`, {
+      data: request.data,
+      params: request.params,
+    });
+    return request;
   });
-  return request;
-});
 
-api.interceptors.response.use(
-  response => {
-    console.log(`✅ API SUCCESS: ${response.status} ${response.config.url}`, {
-      data: response.data,
-      status: response.status
-    });
-    return response;
-  },
-  error => {
-    console.error(`❌ API ERROR: ${error.response?.status || 'NO RESPONSE'} ${error.config?.url}`, {
-      error: error.response?.data,
-      message: error.message,
-      config: error.config
-    });
-    return Promise.reject(error);
+  api.interceptors.response.use(
+    response => {
+      console.log(`✅ API SUCCESS: ${response.status} ${response.config.url}`, {
+        data: response.data,
+        status: response.status
+      });
+      return response;
+    },
+    error => {
+      console.error(`❌ API ERROR: ${error.response?.status || 'NO RESPONSE'} ${error.config?.url}`, {
+        error: error.response?.data,
+        message: error.message,
+      });
+      return Promise.reject(error);
+    }
+  );
+
+  const debugAPI = {
+    testCheckpoints: () => api.get('/data/gan-checkpoints').then(r => {
+      console.log('🔍 DEBUG Checkpoints response:', r.data);
+      return r.data;
+    }),
+    testGANStatus: () => api.get('/data/gan-status').then(r => {
+      console.log('🔍 DEBUG GAN Status response:', r.data);
+      return r.data;
+    })
+  };
+
+  if (typeof window !== 'undefined') {
+    (window as any).debugAPI = debugAPI;
   }
-);
-
-// Экспорт для ручного тестирования в консоли
-export const debugAPI = {
-  testCheckpoints: () => api.get('/data/gan-checkpoints').then(r => {
-    console.log('🔍 DEBUG Checkpoints response:', r.data);
-    return r.data;
-  }),
-  testGANStatus: () => api.get('/data/gan-status').then(r => {
-    console.log('🔍 DEBUG GAN Status response:', r.data);
-    return r.data;
-  })
-};
-
-// Глобальный дебаг объект
-declare global {
-  interface Window {
-    debugAPI: any;
-  }
-}
-
-if (typeof window !== 'undefined') {
-  window.debugAPI = debugAPI;
 }

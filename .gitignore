@@ -1,14 +1,40 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 venv/
 env/
-.vscode/
-.idea/
-*.db
-*.sqlite3
+*.egg-info/
+*.egg
+dist/
+build/
+pip-wheel-metadata/
+
+# Node / React
+node_modules/
+build/
 .env
 .env.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Databases
+*.db
+*.sqlite3
+
+# Logs
 *.log
 logs/
-node_modules
+
+# IDE / Editor
+.vscode/
+.idea/
+
+# Docker
+*.tar
+docker-compose.override.yml
+
+# OS Files
+.DS_Store
+Thumbs.db
