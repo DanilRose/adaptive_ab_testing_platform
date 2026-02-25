@@ -27,6 +27,7 @@ export const dataAPI = {
   getGANStatus: () => api.get('/data/gan-status'),
   getGANCheckpoints: () => api.get('/data/gan-checkpoints'),
   loadGANCheckpoint: (checkpointName: string) => api.post('/data/gan-load-checkpoint', { checkpoint_name: checkpointName }),
+  runABTestOnSynthetic: (data: any) => api.post('/data/run-ab-test-simulation', data),
 };
 
 // Results API
