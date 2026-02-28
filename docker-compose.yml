@@ -4,48 +4,38 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     container_name: ab-testing-backend
+    # --reload: uvicorn перезапускается автоматически при изменении .py файлов
+    command: uvicorn backend.api.main:app --host 0.0.0.0 --port 8000 --reload --log-level info
     ports:
       - "8000:8000"
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
-      - CORS_ORIGINS=http://localhost:3000,http://frontend:80
+      - CORS_ORIGINS=http://localhost:3000
     volumes:
-      - ./backend/gan/checkpoints:/app/backend/gan/checkpoints:rw
-      - ./backend/logs:/app/logs:rw
+      - ./backend:/app/backend    # исходники бекенда монтируются напрямую
+      - ./backend/logs:/app/logs
     networks:
       - ab-testing-network
-    healthcheck:
-
-      test: ["CMD", "python", "-c",
-             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
     restart: unless-stopped
 
   frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-      args:
-        - VITE_API_BASE_URL=/api/v1
+    image: node:18-alpine
     container_name: ab-testing-frontend
+    working_dir: /app
+    # npm install при каждом старте (на случай новых зависимостей), затем Vite dev-сервер
+    command: sh -c "npm install && npm run dev"
     ports:
-      - "3000:80"
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app           # исходники фронтенда монтируются напрямую
+      - /app/node_modules         # анонимный volume — node_modules не перезаписывается с хоста
+    environment:
+      - VITE_API_BASE_URL=/api/v1
     depends_on:
       - backend
     networks:
       - ab-testing-network
-    healthcheck:
-
-      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    restart: unless-stopped
 
 networks:
   ab-testing-network:

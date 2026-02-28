@@ -188,6 +188,7 @@ class AdaptiveABTest:
             
             results[variant] = TestResult(
                 variant=variant,
+                sample_size=sample_size,
                 mean=mean,
                 std=std,
                 confidence_interval=(float(ci_low), float(ci_high))
