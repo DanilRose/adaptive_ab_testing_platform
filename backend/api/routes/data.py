@@ -1,5 +1,5 @@
 # backend/api/routes/data.py
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional
 import pandas as pd
@@ -12,6 +12,8 @@ from backend.services.traffic_generator.data_generator import RealisticDataGener
 from backend.services.gan_integration import gan_service
 from backend.services.evaluator import GANEvaluator
 from backend.ab_testing.managers import AdaptiveABTestingPlatform
+from backend.auth.models import User
+from backend.auth.service import require_role
 
 platform = AdaptiveABTestingPlatform() 
 
@@ -37,7 +39,7 @@ class LoadCheckpointRequest(BaseModel):
     checkpoint_name: str
 
 @router.post("/generate-real", summary="Сгенерировать реальные данные")
-async def generate_real_data(request: DataGenerationRequest):
+async def generate_real_data(request: DataGenerationRequest, current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         real_data = data_generator.generate_dataset(request.num_samples)
         
@@ -62,7 +64,11 @@ async def generate_real_data(request: DataGenerationRequest):
         raise HTTPException(status_code=500, detail=f"Ошибка генерации данных: {str(e)}")
 
 @router.post("/train-gan", summary="Обучить GAN модель")
-async def train_gan_model(request: GANTrainingRequest, background_tasks: BackgroundTasks):
+async def train_gan_model(
+    request: GANTrainingRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(require_role("developer", "analyst")),
+):
     try:
         # Генерация данных для обучения
         real_data = data_generator.generate_dataset(request.real_data_samples)
@@ -88,7 +94,7 @@ async def train_gan_model(request: GANTrainingRequest, background_tasks: Backgro
         raise HTTPException(status_code=500, detail=f"Ошибка обучения GAN: {str(e)}")
 
 @router.get("/gan-status", summary="Статус GAN модели")
-async def get_gan_status():
+async def get_gan_status(current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         status = gan_service.get_status()
         return status
@@ -97,7 +103,7 @@ async def get_gan_status():
         raise HTTPException(status_code=500, detail=f"Ошибка получения статуса: {str(e)}")
 
 @router.post("/generate-synthetic", summary="Сгенерировать синтетические данные")
-async def generate_synthetic_data(request: SyntheticDataRequest):
+async def generate_synthetic_data(request: SyntheticDataRequest, current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         if not gan_service.is_trained:
             raise HTTPException(status_code=400, detail="GAN модель не обучена. Сначала обучите модель.")
@@ -133,7 +139,7 @@ async def generate_synthetic_data(request: SyntheticDataRequest):
         raise HTTPException(status_code=500, detail=f"Ошибка генерации синтетических данных: {str(e)}")
 
 @router.post("/load-pretrained", summary="Загрузить предобученную модель")
-async def load_pretrained_model(checkpoint_path: str):
+async def load_pretrained_model(checkpoint_path: str, current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         success = gan_service.load_pretrained_model(checkpoint_path)
         
@@ -150,7 +156,7 @@ async def load_pretrained_model(checkpoint_path: str):
         raise HTTPException(status_code=500, detail=f"Ошибка загрузки модели: {str(e)}")
 
 @router.get("/dataset-stats", summary="Статистика datasets")
-async def get_dataset_stats():
+async def get_dataset_stats(current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         sample_real_data = data_generator.generate_dataset(1000)
         real_stats = sample_real_data.describe().to_dict()
@@ -165,7 +171,7 @@ async def get_dataset_stats():
         raise HTTPException(status_code=500, detail=f"Ошибка получения статистики: {str(e)}")
     
 @router.get("/gan-checkpoints", summary="Список доступных чекпоинтов")
-async def get_gan_checkpoints():
+async def get_gan_checkpoints(current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         print("🔍 DEBUG: Getting GAN status for checkpoints...")
         status = gan_service.get_status()
@@ -181,7 +187,7 @@ async def get_gan_checkpoints():
         raise HTTPException(status_code=500, detail=f"Ошибка получения чекпоинтов: {str(e)}")
 
 @router.post("/gan-load-checkpoint", summary="Загрузить чекпоинт")
-async def load_gan_checkpoint(request: LoadCheckpointRequest):  
+async def load_gan_checkpoint(request: LoadCheckpointRequest, current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         success = gan_service.load_pretrained_model(request.checkpoint_name)
         
@@ -198,7 +204,7 @@ async def load_gan_checkpoint(request: LoadCheckpointRequest):
         raise HTTPException(status_code=500, detail=f"Ошибка загрузки модели: {str(e)}")
     
 @router.post("/run-ab-test-simulation", summary="Запустить симуляцию A/B теста")
-async def run_ab_test_simulation(request: dict):
+async def run_ab_test_simulation(request: dict, current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         from backend.services.ab_test_simulator import ABTestSimulator
         from backend.api.routes.tests import platform 

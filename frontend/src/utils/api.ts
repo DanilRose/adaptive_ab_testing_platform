@@ -1,7 +1,15 @@
 // frontend/src/utils/api.ts
 import axios from 'axios';
+import type { LoginCredentials } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+
+const clearAuthStorage = (): void => {
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('user_role');
+  localStorage.removeItem('user_full_name');
+  localStorage.removeItem('username');
+};
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -9,6 +17,31 @@ export const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('access_token');
+
+  if (token) {
+    config.headers = config.headers ?? {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+
+  return config;
+});
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      clearAuthStorage();
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
 
 // A/B Tests API
 export const abTestAPI = {
@@ -33,15 +66,31 @@ export const dataAPI = {
 // Results API
 export const resultsAPI = {
   getDetailedResults: (testId: string) => api.get(`/results/${testId}/detailed`),
-  getStatisticalSignificance: (testId: string, alpha: number = 0.05) => 
+  getStatisticalSignificance: (testId: string, alpha: number = 0.05) =>
     api.get(`/results/${testId}/statistical-significance?alpha=${alpha}`),
   getPlatformStats: () => api.get('/results/platform/performance'),
 };
 
+// Auth API
+export const authAPI = {
+  login: (credentials: LoginCredentials) => {
+    const payload = new URLSearchParams();
+    payload.append('username', credentials.username);
+    payload.append('password', credentials.password);
 
-// Debug-утилиты 
+    return api.post('/auth/login', payload, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    });
+  },
+  me: () => api.get('/auth/me'),
+  logout: () => api.post('/auth/logout'),
+};
+
+// Debug-утилиты
 if (import.meta.env.DEV) {
-  api.interceptors.request.use(request => {
+  api.interceptors.request.use((request) => {
     console.log(`🚀 API REQUEST: ${request.method?.toUpperCase()} ${request.url}`, {
       data: request.data,
       params: request.params,
@@ -50,14 +99,14 @@ if (import.meta.env.DEV) {
   });
 
   api.interceptors.response.use(
-    response => {
+    (response) => {
       console.log(`✅ API SUCCESS: ${response.status} ${response.config.url}`, {
         data: response.data,
-        status: response.status
+        status: response.status,
       });
       return response;
     },
-    error => {
+    (error) => {
       console.error(`❌ API ERROR: ${error.response?.status || 'NO RESPONSE'} ${error.config?.url}`, {
         error: error.response?.data,
         message: error.message,
@@ -67,14 +116,16 @@ if (import.meta.env.DEV) {
   );
 
   const debugAPI = {
-    testCheckpoints: () => api.get('/data/gan-checkpoints').then(r => {
-      console.log('🔍 DEBUG Checkpoints response:', r.data);
-      return r.data;
-    }),
-    testGANStatus: () => api.get('/data/gan-status').then(r => {
-      console.log('🔍 DEBUG GAN Status response:', r.data);
-      return r.data;
-    })
+    testCheckpoints: () =>
+      api.get('/data/gan-checkpoints').then((r) => {
+        console.log('🔍 DEBUG Checkpoints response:', r.data);
+        return r.data;
+      }),
+    testGANStatus: () =>
+      api.get('/data/gan-status').then((r) => {
+        console.log('🔍 DEBUG GAN Status response:', r.data);
+        return r.data;
+      }),
   };
 
   if (typeof window !== 'undefined') {

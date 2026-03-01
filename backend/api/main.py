@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from backend.api.routes.tests import router as tests_router
 from backend.api.routes.data import router as data_router
 from backend.api.routes.results import router as results_router
+from backend.api.routes.auth import router as auth_router
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -45,6 +46,7 @@ app.add_middleware(
 )
 
 # Подключение роутеров
+app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(tests_router)
 app.include_router(data_router)
 app.include_router(results_router)

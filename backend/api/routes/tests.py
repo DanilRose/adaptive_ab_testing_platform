@@ -7,6 +7,8 @@ import uuid
 
 from backend.ab_testing.core import MetricType, TestConfig
 from backend.ab_testing.managers import AdaptiveABTestingPlatform
+from backend.auth.models import User
+from backend.auth.service import get_current_user, require_role
 
 router = APIRouter(prefix="/api/v1/tests", tags=["A/B Tests"])
 
@@ -47,7 +49,7 @@ class TestStopRequest(BaseModel):
     reason: str = Field("Manual stop", description="Причина остановки")
 
 @router.post("/", summary="Создать новый A/B тест")
-async def create_test(request: dict):
+async def create_test(request: dict, current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         test_id = f"test_{uuid.uuid4().hex[:8]}"
         
@@ -74,7 +76,7 @@ async def create_test(request: dict):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/{test_id}/assign", summary="Назначить пользователя в тест")
-async def assign_user(test_id: str, request: UserAssignmentRequest):
+async def assign_user(test_id: str, request: UserAssignmentRequest, current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         assignment = platform.assign_user_to_test(
             test_id=test_id,
@@ -92,7 +94,7 @@ async def assign_user(test_id: str, request: UserAssignmentRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/metrics/record", summary="Записать метрику пользователя")
-async def record_metric(request: MetricRecordRequest):
+async def record_metric(request: MetricRecordRequest, current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         platform.record_user_metric(
             session_id=request.session_id,
@@ -110,7 +112,7 @@ async def record_metric(request: MetricRecordRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/sessions/complete", summary="Завершить сессию пользователя")
-async def complete_session(request: SessionCompleteRequest):
+async def complete_session(request: SessionCompleteRequest, current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         platform.complete_user_session(
             session_id=request.session_id,
@@ -127,7 +129,7 @@ async def complete_session(request: SessionCompleteRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/{test_id}/results", summary="Получить результаты теста")
-async def get_test_results(test_id: str):
+async def get_test_results(test_id: str, current_user: User = Depends(get_current_user)):
     try:
         results = platform.get_test_results(test_id)
         return results
@@ -137,7 +139,7 @@ async def get_test_results(test_id: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/{test_id}/stop", summary="Остановить тест")
-async def stop_test(test_id: str, request: TestStopRequest):
+async def stop_test(test_id: str, request: TestStopRequest, current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         result = platform.stop_test(test_id, request.reason)
         return result
@@ -147,7 +149,7 @@ async def stop_test(test_id: str, request: TestStopRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/", summary="Получить список активных тестов")
-async def get_active_tests():
+async def get_active_tests(current_user: User = Depends(get_current_user)):
     try:
         active_tests = platform.test_registry.get_active_tests()
         return {
@@ -158,7 +160,7 @@ async def get_active_tests():
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/stats/platform", summary="Статистика платформы")
-async def get_platform_stats():
+async def get_platform_stats(current_user: User = Depends(get_current_user)):
     try:
         stats = platform.get_platform_stats()
         return stats
@@ -166,7 +168,7 @@ async def get_platform_stats():
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/history", summary="История завершенных тестов")
-async def get_test_history(limit: int = 50):
+async def get_test_history(limit: int = 50, current_user: User = Depends(get_current_user)):
     try:
         history = platform.test_registry.get_test_history(limit)
         return {
@@ -177,7 +179,7 @@ async def get_test_history(limit: int = 50):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.delete("/{test_id}", summary="Удалить тест")
-async def delete_test(test_id: str):
+async def delete_test(test_id: str, current_user: User = Depends(require_role("developer", "analyst"))):
     try:
         # В реальном приложении добавить проверку прав
         if test_id in platform.test_manager.active_tests:

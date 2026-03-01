@@ -1,6 +1,6 @@
 # backend/api/routes/results.py
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
 import pandas as pd
@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 import json
 
 from backend.ab_testing.managers import AdaptiveABTestingPlatform
+from backend.auth.models import User
+from backend.auth.service import get_current_user
 
 router = APIRouter(prefix="/api/v1/results", tags=["Results & Analytics"])
 
@@ -38,7 +40,7 @@ class TimeSeriesRequest(BaseModel):
     metric: Optional[str] = None
 
 @router.get("/{test_id}/detailed", summary="Детальные результаты теста")
-async def get_detailed_results(test_id: str):
+async def get_detailed_results(test_id: str, current_user: User = Depends(get_current_user)):
     try:
         results = platform.get_test_results(test_id)
         
@@ -58,7 +60,7 @@ async def get_detailed_results(test_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{test_id}/statistical-significance", summary="Статистическая значимость")
-async def get_statistical_significance(test_id: str, alpha: float = 0.05):
+async def get_statistical_significance(test_id: str, alpha: float = 0.05, current_user: User = Depends(get_current_user)):
     try:
         results, p_values = platform.test_manager.get_test_results(test_id)
         
@@ -98,7 +100,7 @@ async def get_statistical_significance(test_id: str, alpha: float = 0.05):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{test_id}/time-series", summary="Временные ряды метрик")
-async def get_time_series_data(request: TimeSeriesRequest):
+async def get_time_series_data(request: TimeSeriesRequest, current_user: User = Depends(get_current_user)):
     try:
         # В реальном приложении здесь была бы логика получения временных рядов из БД
         # Сейчас генерируем синтетические данные для демонстрации
@@ -116,7 +118,7 @@ async def get_time_series_data(request: TimeSeriesRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{test_id}/segmentation", summary="Анализ по сегментам")
-async def get_segmentation_analysis(test_id: str, segment_by: str = "user_type"):
+async def get_segmentation_analysis(test_id: str, segment_by: str = "user_type", current_user: User = Depends(get_current_user)):
     try:
         # В реальном приложении здесь была бы логика сегментации из БД
         # Сейчас генерируем синтетические сегменты
@@ -134,7 +136,7 @@ async def get_segmentation_analysis(test_id: str, segment_by: str = "user_type")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{test_id}/financial-impact", summary="Финансовый анализ")
-async def get_financial_impact(test_id: str, arpu: float = 100.0):
+async def get_financial_impact(test_id: str, arpu: float = 100.0, current_user: User = Depends(get_current_user)):
     try:
         results, _ = platform.test_manager.get_test_results(test_id)
         
@@ -151,7 +153,7 @@ async def get_financial_impact(test_id: str, arpu: float = 100.0):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/platform/performance", summary="Производительность платформы")
-async def get_platform_performance(days: int = 30):
+async def get_platform_performance(days: int = 30, current_user: User = Depends(get_current_user)):
     try:
         platform_stats = platform.get_platform_stats()
         test_history = platform.test_registry.get_test_history(limit=100)
@@ -172,7 +174,8 @@ async def get_platform_performance(days: int = 30):
 async def export_test_results(
     test_id: str, 
     format: str = Query("json", regex="^(json|csv|excel)$"),
-    include_raw_data: bool = False
+    include_raw_data: bool = False,
+    current_user: User = Depends(get_current_user),
 ):
     try:
         results, p_values = platform.test_manager.get_test_results(test_id)

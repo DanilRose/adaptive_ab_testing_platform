@@ -29,3 +29,24 @@ export interface TestSummary {
     confidence_level: string;
   };
 }
+
+export type UserRole = 'developer' | 'analyst' | 'manager';
+
+export interface AuthUser {
+  id: number;
+  username: string;
+  role: UserRole;
+  full_name: string;
+}
+
+export interface AuthTokenResponse {
+  access_token: string;
+  token_type: string;
+  role: UserRole;
+  full_name: string;
+}
+
+export interface LoginCredentials {
+  username: string;
+  password: string;
+}
