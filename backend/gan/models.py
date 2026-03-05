@@ -289,7 +289,6 @@ class GAN:
             real_labels = torch.ones(batch_size, 1).to(self.device) * 0.9  
             fake_labels = torch.zeros(batch_size, 1).to(self.device) * 0.1 
             
-            # Обучение дискриминатора
             self.discriminator.zero_grad()
             
             real_output = self.discriminator(real_batch)
@@ -304,7 +303,6 @@ class GAN:
             d_loss.backward()
             self.optimizer_D.step()
             
-            # Обучение генератора
             self.generator.zero_grad()
             
             gen_output = self.discriminator(fake_batch)
@@ -370,7 +368,7 @@ class GAN:
             else:
                 self.train_epoch_standard(dataloader, epoch)
             
-            # Логирование
+
             if epoch % self.config.LOG_INTERVAL == 0:
                 current_g_loss = self.g_losses[-1] if self.g_losses else 0
                 current_d_loss = self.d_losses[-1] if self.d_losses else 0
@@ -383,11 +381,10 @@ class GAN:
                 else:
                     print(f"Epoch [{epoch}/{epochs}] G: {current_g_loss:.4f} D: {current_d_loss:.4f}")
             
-            # мониторинг
             if epoch % self.config.VALIDATION_INTERVAL == 0 and epoch > 0:
                 fid_score = self._validate_training(real_data, epoch)
                 
-                if fid_score < best_fid:
+                if fid_score is not None and fid_score < best_fid:
                     best_fid = fid_score
                     patience_counter = 0
                     self._save_checkpoint(f"best_fid_{fid_score:.1f}")
@@ -421,17 +418,21 @@ class GAN:
             for feature in numerical_features[:5]:
                 real_mean = real_data[feature].mean()
                 synth_mean = synthetic_val[feature].mean()
-                mean_diff = abs(real_mean - synth_mean) / real_mean
+                if real_mean != 0:
+                    mean_diff = abs(real_mean - synth_mean) / real_mean
+                else:
+                    mean_diff = 0.0
                 
-                if mean_diff < 0.2:  
+                if mean_diff < 0.2:
                     stats_ok += 1
             
-            print(f" Validation Epoch {epoch}: FID={fid_score:.1f}, Stats: {stats_ok}/5 OK")
+            fid_display = f"{fid_score:.1f}" if fid_score is not None else "N/A"
+            print(f" Validation Epoch {epoch}: FID={fid_display}, Stats: {stats_ok}/5 OK")
             return fid_score
         
         except Exception as e:
             print(f" Validation error: {e}")
-            return float('inf')
+            return None
     
     def _save_checkpoint(self, epoch):
         torch.save({
@@ -542,16 +543,13 @@ class GAN:
             return self._postprocess(synthetic_data)
     
     def load_checkpoint(self, checkpoint_path):
-        # Сначала загружаем чекпоинт чтобы получить feature_info
         checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
         
-        # Инициализируем модель с данными из чекпоинта
         self.feature_info = checkpoint['feature_info']
         self.processed_columns = checkpoint['processed_columns']
         self.scalers = checkpoint.get('scalers', {})
         self.input_dim = len(self.processed_columns)
         
-        # Теперь инициализируем generator и discriminator
         if self.config.USE_WGAN_GP:
             self.generator = WGAN_GP_Generator(
                 self.config.LATENT_DIM,
@@ -576,12 +574,10 @@ class GAN:
                 self.config.LEAKY_RELU_SLOPE
             ).to(self.device)
         
-        # Инициализируем оптимизаторы
         self.optimizer_G = optim.Adam(self.generator.parameters(), lr=self.config.LEARNING_RATE, betas=(0.0, 0.9))
         self.optimizer_D = optim.Adam(self.discriminator.parameters(), lr=self.config.LEARNING_RATE, betas=(0.0, 0.9))
         self.criterion = nn.BCELoss()
         
-        # Теперь загружаем состояния
         self.generator.load_state_dict(checkpoint['generator_state_dict'])
         self.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
         self.optimizer_G.load_state_dict(checkpoint['optimizer_G_state_dict'])

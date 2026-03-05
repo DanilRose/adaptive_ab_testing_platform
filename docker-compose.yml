@@ -1,10 +1,24 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ab-testing-postgres
+    environment:
+      - POSTGRES_DB=ab_testing
+      - POSTGRES_USER=ab_user
+      - POSTGRES_PASSWORD=ab_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ab-testing-network
+    restart: unless-stopped
+
   backend:
     build:
       context: .
       dockerfile: Dockerfile.backend
     container_name: ab-testing-backend
-    # --reload: uvicorn перезапускается автоматически при изменении .py файлов
     command: uvicorn backend.api.main:app --host 0.0.0.0 --port 8000 --reload --log-level info
     ports:
       - "8000:8000"
@@ -12,9 +26,17 @@ services:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
       - CORS_ORIGINS=http://localhost:3000
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=ab_testing
+      - DB_USER=ab_user
+      - DB_PASSWORD=ab_password
+      - DATABASE_URL=postgresql+psycopg2://ab_user:ab_password@postgres:5432/ab_testing
     volumes:
-      - ./backend:/app/backend    # исходники бекенда монтируются напрямую
+      - ./backend:/app/backend
       - ./backend/logs:/app/logs
+    depends_on:
+      - postgres
     networks:
       - ab-testing-network
     restart: unless-stopped
@@ -23,19 +45,38 @@ services:
     image: node:18-alpine
     container_name: ab-testing-frontend
     working_dir: /app
-    # npm install при каждом старте (на случай новых зависимостей), затем Vite dev-сервер
     command: sh -c "npm install && npm run dev"
     ports:
       - "3000:3000"
     volumes:
-      - ./frontend:/app           # исходники фронтенда монтируются напрямую
-      - /app/node_modules         # анонимный volume — node_modules не перезаписывается с хоста
+      - ./frontend:/app
+      - /app/node_modules
     environment:
       - VITE_API_BASE_URL=/api/v1
     depends_on:
       - backend
     networks:
       - ab-testing-network
+
+  pgadmin:
+    image: dpage/pgadmin4:8.7
+    container_name: ab-testing-pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@example.com
+      - PGADMIN_DEFAULT_PASSWORD=admin123
+      - PGADMIN_LISTEN_PORT=5050
+    ports:
+      - "5050:5050"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - ab-testing-network
+
+volumes:
+  postgres_data:
+  pgadmin_data:
 
 networks:
   ab-testing-network:

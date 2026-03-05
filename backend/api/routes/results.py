@@ -9,13 +9,11 @@ import scipy.stats as stats
 from datetime import datetime, timedelta
 import json
 
-from backend.ab_testing.managers import AdaptiveABTestingPlatform
+from backend.api.routes.tests import platform
 from backend.auth.models import User
 from backend.auth.service import get_current_user
 
 router = APIRouter(prefix="/api/v1/results", tags=["Results & Analytics"])
-
-platform = AdaptiveABTestingPlatform()
 
 class StatisticalSummary(BaseModel):
     variant: str
@@ -44,7 +42,6 @@ async def get_detailed_results(test_id: str, current_user: User = Depends(get_cu
     try:
         results = platform.get_test_results(test_id)
         
-        # Дополнительный статистический анализ
         detailed_analysis = await _perform_detailed_analysis(results)
         
         return {
@@ -70,11 +67,9 @@ async def get_statistical_significance(test_id: str, alpha: float = 0.05, curren
         
         for variant, p_value in p_values.items():
             variant_data = results[variant]
-            
-            # Расчет мощности теста
+
             power = await _calculate_power(control_data, variant_data, alpha)
             
-            # Расчет доверительных интервалов для разницы
             effect_size = variant_data.mean - control_data.mean
             effect_ci = await _calculate_effect_confidence_interval(control_data, variant_data)
             
@@ -102,8 +97,6 @@ async def get_statistical_significance(test_id: str, alpha: float = 0.05, curren
 @router.get("/{test_id}/time-series", summary="Временные ряды метрик")
 async def get_time_series_data(request: TimeSeriesRequest, current_user: User = Depends(get_current_user)):
     try:
-        # В реальном приложении здесь была бы логика получения временных рядов из БД
-        # Сейчас генерируем синтетические данные для демонстрации
         
         time_series_data = await _generate_time_series_data(request.test_id, request.time_window)
         
@@ -120,9 +113,7 @@ async def get_time_series_data(request: TimeSeriesRequest, current_user: User = 
 @router.get("/{test_id}/segmentation", summary="Анализ по сегментам")
 async def get_segmentation_analysis(test_id: str, segment_by: str = "user_type", current_user: User = Depends(get_current_user)):
     try:
-        # В реальном приложении здесь была бы логика сегментации из БД
-        # Сейчас генерируем синтетические сегменты
-        
+
         segments_analysis = await _generate_segmentation_analysis(test_id, segment_by)
         
         return {
@@ -191,18 +182,16 @@ async def export_test_results(
         if format == "json":
             return export_data
         elif format == "csv":
-            # Конвертация в CSV формат
             csv_data = await _convert_to_csv(export_data)
             return {"csv_data": csv_data}
         elif format == "excel":
-            # Логика для Excel экспорта
             excel_data = await _convert_to_excel(export_data)
-            return {"excel_data": "Base64 encoded Excel file"}  # Упрощенно
+            return {"excel_data": "Base64 encoded Excel file"}  
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# Вспомогательные методы
+
 async def _perform_detailed_analysis(results: Dict[str, Any]) -> Dict[str, Any]:
     """Выполняет детальный статистический анализ результатов"""
     basic_results = results.get('results', {})
@@ -213,7 +202,7 @@ async def _perform_detailed_analysis(results: Dict[str, Any]) -> Dict[str, Any]:
         if variant == control_variant:
             continue
             
-        # Расчет различных метрик
+
         analysis[variant] = {
             "relative_improvement": _calculate_relative_improvement(
                 basic_results[control_variant]['mean'], 
@@ -229,7 +218,7 @@ async def _perform_detailed_analysis(results: Dict[str, Any]) -> Dict[str, Any]:
 async def _calculate_power(control_data: Any, variant_data: Any, alpha: float) -> float:
     """Расчет мощности теста"""
     try:
-        # Упрощенный расчет мощности
+
         effect_size = abs(variant_data.mean - control_data.mean)
         pooled_std = np.sqrt((control_data.std**2 + variant_data.std**2) / 2)
         
@@ -244,7 +233,6 @@ async def _calculate_power(control_data: Any, variant_data: Any, alpha: float) -
         return 0.0
 
 async def _calculate_effect_confidence_interval(control_data: Any, variant_data: Any) -> List[float]:
-    """Расчет доверительного интервала для размера эффекта"""
     try:
         mean_diff = variant_data.mean - control_data.mean
         se_diff = np.sqrt(
@@ -260,7 +248,6 @@ async def _calculate_effect_confidence_interval(control_data: Any, variant_data:
         return [0.0, 0.0]
 
 async def _calculate_required_sample_size(control_data: Any, variant_data: Any, alpha: float, power: float) -> int:
-    """Расчет требуемого размера выборки"""
     try:
         effect_size = abs(variant_data.mean - control_data.mean)
         pooled_std = np.sqrt((control_data.std**2 + variant_data.std**2) / 2)
@@ -278,7 +265,6 @@ async def _calculate_required_sample_size(control_data: Any, variant_data: Any, 
         return 0
 
 def _interpret_significance(significance_analysis: Dict[str, Any], alpha: float) -> Dict[str, str]:
-    """Интерпретация статистической значимости"""
     significant_variants = [
         variant for variant, analysis in significance_analysis.items() 
         if analysis['statistically_significant']

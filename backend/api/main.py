@@ -1,6 +1,8 @@
 # backend/api/main.py
 
 import os
+import math
+import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -15,27 +17,50 @@ from backend.api.routes.tests import router as tests_router
 from backend.api.routes.data import router as data_router
 from backend.api.routes.results import router as results_router
 from backend.api.routes.auth import router as auth_router
+from backend.database.init_db import bootstrap_database
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def sanitize_data(data):
+    """Recursively sanitize data to replace NaN/Infinity with None"""
+    if isinstance(data, dict):
+        return {k: sanitize_data(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [sanitize_data(item) for item in data]
+    elif isinstance(data, float):
+        if math.isnan(data) or math.isinf(data):
+            return None
+        return data
+    return data
+
+
+class SanitizedJSONResponse(JSONResponse):
+    def render(self, content) -> bytes:
+        sanitized = sanitize_data(content)
+        return super().render(sanitized)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("🚀 Starting Adaptive A/B Testing Platform API")
+    logger.info(" Starting Adaptive A/B Testing Platform API")
+    try:
+        bootstrap_database()
+        logger.info("✅ Database initialized")
+    except Exception as db_exc:
+        logger.error(f"❌ Database bootstrap failed: {db_exc}", exc_info=True)
     yield
-    # Shutdown
-    logger.info("🛑 Shutting down Adaptive A/B Testing Platform API")
+    logger.info("Shutting down Adaptive A/B Testing Platform API")
 
 app = FastAPI(
     title="Adaptive A/B Testing Platform",
     description="Профессиональная платформа для адаптивного A/B тестирования с использованием ML",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    default_response_class=SanitizedJSONResponse
 )
 
-# CORS middleware
+
 cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://frontend:80").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -45,7 +70,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Подключение роутеров
+
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(tests_router)
 app.include_router(data_router)
@@ -87,7 +112,6 @@ async def api_status():
         "uptime": "0 days 0 hours 0 minutes"
     }
 
-# Глобальный обработчик ошибок
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     logger.error(f"Global error handler: {str(exc)}", exc_info=True)
@@ -95,7 +119,7 @@ async def global_exception_handler(request, exc):
         status_code=500,
         content={
             "error": "Internal server error",
-            "request_id": "mock-request-id"  # В реальном приложении генерировать ID
+            "request_id": "mock-request-id"  
         }
     )
 

@@ -1,8 +1,7 @@
 // frontend/src/components/Dashboard/Dashboard.tsx
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Statistic, List, Tag, Button, message } from 'antd';
+import { Card, Row, Col, Statistic, List, Tag, Button, message, Typography } from 'antd';
 import { abTestAPI, resultsAPI, dataAPI } from '../../utils/api';
-import { TestSummary } from '../../types';
 import { Modal } from 'antd';
 
 export const Dashboard: React.FC = () => {
@@ -40,7 +39,6 @@ export const Dashboard: React.FC = () => {
       });
       message.success(`Симуляция запущена для теста ${testId}! Данные начнут поступать через несколько секунд.`);
       
-      // Обновляем данные через 3 секунды
       setTimeout(() => {
         loadDashboardData();
       }, 3000);
@@ -58,26 +56,68 @@ export const Dashboard: React.FC = () => {
     try {
       const response = await abTestAPI.getResults(testId);
       
-      // Открываем модальное окно с результатами
+      const pm = response.data.pm_summary;
+      const fallbackSummary = response.data.summary;
+
       Modal.info({
         title: `Результаты теста ${testId}`,
         width: 1000,
         content: (
           <div style={{ maxHeight: '60vh', overflow: 'auto' }}>
-            <h4>Статистика по вариантам:</h4>
-            <pre>{JSON.stringify(response.data.results, null, 2)}</pre>
-            
-            {response.data.statistical_significance && (
+            {pm ? (
               <>
-                <h4>Статистическая значимость:</h4>
-                <pre>{JSON.stringify(response.data.statistical_significance, null, 2)}</pre>
+                <Typography.Title level={4} style={{ marginTop: 0 }}>
+                  {pm.headline}
+                </Typography.Title>
+                <Typography.Paragraph>
+                  <b>Решение:</b> {pm.decision}
+                </Typography.Paragraph>
+                <Typography.Paragraph>
+                  <b>Уверенность:</b> {pm.confidence}
+                </Typography.Paragraph>
+                {pm.winner && (
+                  <Typography.Paragraph>
+                    <b>Победитель:</b> {pm.winner}
+                  </Typography.Paragraph>
+                )}
+
+                <Typography.Title level={5}>Сравнение вариантов</Typography.Title>
+                <List
+                  size="small"
+                  dataSource={pm.variant_cards || []}
+                  locale={{ emptyText: 'Нет данных по вариантам' }}
+                  renderItem={(card: any) => (
+                    <List.Item>
+                      <div style={{ width: '100%' }}>
+                        <b>{card.variant}</b> — выборка: {card.sample_size}, среднее: {Number(card.mean).toFixed(4)}, uplift к контролю: {Number(card.uplift_percent_vs_control).toFixed(2)}%, p-value: {card.p_value ?? 'n/a'}{' '}
+                        <Tag color={card.significant ? 'green' : 'orange'}>
+                          {card.significant ? 'значимо' : 'не значимо'}
+                        </Tag>
+                      </div>
+                    </List.Item>
+                  )}
+                />
+
+                <Typography.Title level={5}>Ключевые выводы</Typography.Title>
+                <List
+                  size="small"
+                  dataSource={pm.insights || []}
+                  renderItem={(item: string) => <List.Item>{item}</List.Item>}
+                />
+
+                <Typography.Title level={5}>Следующие шаги</Typography.Title>
+                <List
+                  size="small"
+                  dataSource={pm.next_steps || []}
+                  renderItem={(item: string) => <List.Item>{item}</List.Item>}
+                />
               </>
-            )}
-            
-            {response.data.summary && (
+            ) : (
               <>
-                <h4>Рекомендации:</h4>
-                <pre>{JSON.stringify(response.data.summary, null, 2)}</pre>
+                <Typography.Title level={5}>Сводка</Typography.Title>
+                <pre>{JSON.stringify(fallbackSummary, null, 2)}</pre>
+                <Typography.Title level={5}>Детальные результаты</Typography.Title>
+                <pre>{JSON.stringify(response.data.results, null, 2)}</pre>
               </>
             )}
           </div>
@@ -93,7 +133,7 @@ export const Dashboard: React.FC = () => {
     try {
       await abTestAPI.stopTest(testId, "Остановлено пользователем");
       message.success(`Тест ${testId} остановлен`);
-      loadDashboardData(); // Обновляем список
+      loadDashboardData(); 
     } catch (error: any) {
       message.error('Ошибка остановки теста: ' + (error.response?.data?.detail || error.message));
     }

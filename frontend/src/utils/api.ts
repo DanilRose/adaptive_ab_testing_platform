@@ -56,9 +56,12 @@ export const abTestAPI = {
 export const dataAPI = {
   generateRealData: (data: any) => api.post('/data/generate-real', data),
   trainGAN: (data: any) => api.post('/data/train-gan', data),
+  stopGANTraining: () => api.post('/data/stop-gan-training'),
   generateSynthetic: (data: any) => api.post('/data/generate-synthetic', data),
   getGANStatus: () => api.get('/data/gan-status'),
   getGANCheckpoints: () => api.get('/data/gan-checkpoints'),
+  getDatasetStats: () => api.get('/data/dataset-stats'),
+  listGeneratedHistory: (limit: number = 50) => api.get(`/data/generated-history?limit=${limit}`),
   loadGANCheckpoint: (checkpointName: string) => api.post('/data/gan-load-checkpoint', { checkpoint_name: checkpointName }),
   runABTestOnSynthetic: (data: any) => api.post('/data/run-ab-test-simulation', data),
 };

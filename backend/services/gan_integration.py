@@ -4,9 +4,8 @@ import pandas as pd
 import numpy as np
 from typing import Optional, Dict, Any
 import os
-import glob
-from datetime import datetime
 from backend.services.safe_loader import safe_torch_load
+from backend.services.traffic_generator.data_generator import RealisticDataGenerator
 
 class GANService:
     def __init__(self):
@@ -17,36 +16,13 @@ class GANService:
         self.current_epoch = 0
         self.total_epochs = 0
         self.available_checkpoints = []
-        self._load_available_checkpoints()
-    
-    def _load_available_checkpoints(self):
-        """Загрузка списка доступных чекпоинтов из всех возможных папок"""
-        search_paths = [
-            "gan/checkpoints/*.pth",
-            "backend/gan/checkpoints/*.pth", 
-            "gan_checkpoint_*.pth",
-            "*.pth"
-        ]
-        
-        self.available_checkpoints = []
-        for path in search_paths:
-            checkpoint_files = glob.glob(path)
-            for file in checkpoint_files:
-                try:
-                    file_info = {
-                        'filename': file,
-                        'size': os.path.getsize(file),
-                        'modified': datetime.fromtimestamp(os.path.getmtime(file)),
-                        'path': os.path.abspath(file)
-                    }
-                    # Проверяем, что это действительно чекпоинт GAN
-                    if self._is_gan_checkpoint(file):
-                        self.available_checkpoints.append(file_info)
-                except:
-                    continue
-        
-        # Сортируем по дате изменения (новые сверху)
-        self.available_checkpoints.sort(key=lambda x: x['modified'], reverse=True)
+        self.current_config_snapshot: Dict[str, Any] = {}
+        self.current_config_overrides: Dict[str, Any] = {}
+        self._stop_training = False
+
+    def set_available_checkpoints(self, checkpoints: list[dict[str, Any]]):
+
+        self.available_checkpoints = checkpoints or []
     
     def _is_gan_checkpoint(self, filepath: str) -> bool:
         """Проверка чекпоинта через безопасную загрузку"""
@@ -58,29 +34,74 @@ class GANService:
         except:
             return False
     
-    def initialize_gan(self):
+    def _serialize_config(self, config: Any) -> Dict[str, Any]:
+        snapshot: Dict[str, Any] = {}
+        if config is None:
+            return snapshot
+        
+        # Если config - это словарь, используем его напрямую
+        if isinstance(config, dict):
+            for key, value in config.items():
+                if key.startswith("_"):
+                    continue
+                if isinstance(value, torch.device):
+                    snapshot[key] = str(value)
+                elif isinstance(value, (list, tuple)):
+                    snapshot[key] = list(value)
+                elif isinstance(value, (int, float, str, bool, type(None))):
+                    snapshot[key] = value
+                else:
+                    snapshot[key] = str(value)
+            return snapshot
+        
+        # Если config - это объект с __dict__
+        for key, value in config.__dict__.items():
+            if key.startswith("_"):
+                continue
+            if isinstance(value, torch.device):
+                snapshot[key] = str(value)
+            elif isinstance(value, (list, tuple)):
+                snapshot[key] = list(value)
+            elif isinstance(value, (int, float, str, bool, type(None))):
+                snapshot[key] = value
+            else:
+                snapshot[key] = str(value)
+        return snapshot
+
+    def initialize_gan(self, config_overrides: Optional[Dict[str, Any]] = None, force_reinitialize: bool = False):
         """Инициализация GAN модели"""
         try:
             from backend.gan.config import GANConfig  # ← ПРОВЕРЬ ПУТЬ!
             from backend.gan.models import GAN        # ← ПРОВЕРЬ ПУТЬ!
-            
+
+            if self.gan_model is not None and not force_reinitialize and not config_overrides:
+                return True
+
             config = GANConfig()
+            if config_overrides:
+                for key, value in config_overrides.items():
+                   if hasattr(config, key):
+                       setattr(config, key, value)
+
             self.gan_model = GAN(config)      # ← ТЕПЕРЬ ПРАВИЛЬНЫЙ КЛАСС
             self.current_status = "initialized"
-            self._load_available_checkpoints()
+            self.is_trained = False
+            self.current_config_overrides = config_overrides or {}
+            # Сериализуем конфигурацию ПОСЛЕ применения overrides
+            self.current_config_snapshot = self._serialize_config(config)
             return True
         except Exception as e:
             print(f"Error initializing GAN: {e}")
             self.current_status = f"error: {str(e)}"
             return False
     
-    def train_gan(self, real_data: pd.DataFrame, epochs: int = 50) -> Dict[str, Any]:
-        """Обучение GAN модели с обновлением прогресса"""
+    def train_gan(self, real_data: pd.DataFrame, epochs: int = 50, config_overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Обучение GAN модели с обновлением прогресса (синхронно)"""
         try:
-            if self.gan_model is None:
-                if not self.initialize_gan():
-                    return {"success": False, "error": "Failed to initialize GAN"}
-            
+            if not self.initialize_gan(config_overrides=config_overrides, force_reinitialize=True):
+                return {"success": False, "error": "Failed to initialize GAN"}
+
+            self._stop_training = False
             self.current_status = "training_0%"
             self.training_progress = 0
             self.current_epoch = 0
@@ -90,54 +111,60 @@ class GANService:
             original_train = self.gan_model.train
             original_validate = getattr(self.gan_model, '_validate_training', None)
             
-            # Создаем обертку для отслеживания прогресса
-            def training_wrapper(real_data, epochs=None):
-                actual_epochs = epochs or self.gan_model.config.EPOCHS
-                self.total_epochs = actual_epochs
+            actual_epochs = epochs or self.gan_model.config.EPOCHS
+            self.total_epochs = actual_epochs
+            
+            # Переопределяем валидацию для отслеживания прогресса
+            def validate_with_progress(real_data, epoch):
+                # Проверка флага остановки
+                if self._stop_training:
+                    print(f"Обучение остановлено пользователем на эпохе {epoch}/{actual_epochs}")
+                    raise KeyboardInterrupt("Training stopped by user")
                 
-                # Переопределяем валидацию для отслеживания прогресса
-                def validate_with_progress(real_data, epoch):
-                    self.current_epoch = epoch
-                    progress = min(100, int((epoch / actual_epochs) * 100))
-                    self.training_progress = progress
-                    self.current_status = f"training_{progress}% (эпоха {epoch}/{actual_epochs})"
-                    
-                    print(f"Прогресс обучения: {progress}% (эпоха {epoch}/{actual_epochs})")
-                    
-                    if original_validate:
-                        return original_validate(real_data, epoch)
-                    return float('inf')
+                self.current_epoch = epoch
+                progress = min(100, int((epoch / actual_epochs) * 100))
+                self.training_progress = progress
+                self.current_status = f"training_{progress}% (эпоха {epoch}/{actual_epochs})"
                 
-                self.gan_model._validate_training = validate_with_progress
+                print(f"Прогресс обучения: {progress}% (эпоха {epoch}/{actual_epochs})")
                 
-                # Запускаем обучение
-                result = original_train(real_data, epochs)
-                
-                # Завершение обучения
+                if original_validate:
+                    return original_validate(real_data, epoch)
+                return None
+            
+            self.gan_model._validate_training = validate_with_progress
+            
+            # Запускаем обучение СИНХРОННО (вызывающий код сам решает, запускать в потоке или нет)
+            result = original_train(real_data, epochs)
+            
+            # Завершение обучения
+            if not self._stop_training:
                 self.training_progress = 100
                 self.current_status = "trained"
                 self.is_trained = True
-                self._load_available_checkpoints()
-                
-                return result
-            
-            # Запускаем в отдельном потоке
-            import threading
-            thread = threading.Thread(target=training_wrapper, args=(real_data, epochs))
-            thread.daemon = True
-            thread.start()
             
             return {
                 "success": True,
-                "status": "training_started",
-                "message": f"Обучение запущено на {epochs} эпох"
+                "status": "training_completed" if not self._stop_training else "training_stopped",
+                "message": f"Обучение завершено на {epochs} эпох" if not self._stop_training else f"Обучение остановлено на эпохе {self.current_epoch}/{actual_epochs}"
             }
             
+        except KeyboardInterrupt:
+            self.current_status = "stopped"
+            self.training_progress = int((self.current_epoch / self.total_epochs) * 100) if self.total_epochs > 0 else 0
+            return {"success": True, "status": "training_stopped", "message": f"Обучение остановлено на эпохе {self.current_epoch}/{self.total_epochs}"}
         except Exception as e:
             self.current_status = f"error: {str(e)}"
             return {"success": False, "error": str(e)}
     
-    def generate_synthetic_data(self, num_samples: int = 10000) -> Optional[pd.DataFrame]:
+    def stop_training(self) -> bool:
+        """Остановка обучения GAN"""
+        if self.current_status.startswith("training"):
+            self._stop_training = True
+            return True
+        return False
+    
+    def generate_synthetic_data(self, num_samples: int = 10000, filters: Optional[Dict[str, Any]] = None, dataset_name: Optional[str] = None) -> Optional[pd.DataFrame]:
         """Генерация синтетических данных"""
         try:
             if self.gan_model is None or not self.is_trained:
@@ -145,6 +172,11 @@ class GANService:
             
             self.current_status = "generating"
             synthetic_data = self.gan_model.generate(num_samples)
+            if filters:
+                generator = RealisticDataGenerator()
+                synthetic_data = generator.filter_dataframe(synthetic_data, filters)
+            if dataset_name:
+                synthetic_data['dataset_name'] = dataset_name
             self.current_status = "ready"
             
             return synthetic_data
@@ -163,12 +195,19 @@ class GANService:
             "total_epochs": self.total_epochs,
             "has_model": self.gan_model is not None,
             "available_checkpoints": len(self.available_checkpoints),
-            "checkpoints": self.available_checkpoints[:10]  # Только последние 10
+            "checkpoints": self.available_checkpoints[:10],  # Только последние 10
+            "config": self.current_config_snapshot,
+            "config_overrides": self.current_config_overrides,
         }
         
         if self.gan_model:
-            g_losses = self.gan_model.g_losses or []
-            d_losses = self.gan_model.d_losses or []
+            g_losses_raw = self.gan_model.g_losses or []
+            d_losses_raw = self.gan_model.d_losses or []
+            
+            # Фильтруем None и non-finite значения из потерь
+            import math
+            g_losses = [v for v in g_losses_raw if v is not None and not math.isnan(v) and not math.isinf(v)]
+            d_losses = [v for v in d_losses_raw if v is not None and not math.isnan(v) and not math.isinf(v)]
             
             status_info["loss_history"] = {
                 "g_losses": g_losses[-10:],
@@ -179,7 +218,8 @@ class GANService:
             }
             
             if hasattr(self.gan_model, 'wasserstein_distances') and self.gan_model.wasserstein_distances:
-                wasserstein = self.gan_model.wasserstein_distances
+                wasserstein_raw = self.gan_model.wasserstein_distances
+                wasserstein = [v for v in wasserstein_raw if v is not None and not math.isnan(v) and not math.isinf(v)]
                 status_info["loss_history"]["wasserstein"] = wasserstein[-10:]
                 status_info["loss_history"]["latest_wasserstein"] = wasserstein[-1] if wasserstein else None
         

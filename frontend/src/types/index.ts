@@ -50,3 +50,22 @@ export interface LoginCredentials {
   username: string;
   password: string;
 }
+
+export interface GANConfigOverrides {
+  [key: string]: string | number | boolean | number[];
+}
+
+export interface GANTrainingPayload {
+  epochs: number;
+  real_data_samples: number;
+  save_checkpoint: boolean;
+  checkpoint_name?: string;
+  gan_config?: GANConfigOverrides;
+}
+
+export interface SyntheticGenerationPayload {
+  num_users: number;
+  evaluation_metrics: boolean;
+  filters?: Record<string, any>;
+  dataset_name?: string;
+}

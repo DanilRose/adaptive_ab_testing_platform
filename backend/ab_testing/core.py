@@ -51,7 +51,6 @@ class ThompsonSamplingBandit(BanditAlgorithm):
         self.failures: Dict[str, Dict[str, float]] = {}
     
     def _initialize_test(self, test_id: str, variants: List[str]):
-        """Инициализирует тест с заданными вариантами"""
         if test_id not in self.successes:
             self.successes[test_id] = {}
             self.failures[test_id] = {}
@@ -172,7 +171,8 @@ class AdaptiveABTest:
                 continue
             
             mean = float(np.mean(variant_data))
-            std = float(np.std(variant_data, ddof=1))
+            std_val = np.std(variant_data, ddof=1) if len(variant_data) > 1 else 0.0
+            std = float(std_val) if not (np.isnan(std_val) or np.isinf(std_val)) else 0.0
             sample_size = len(variant_data)
             
             if sample_size > 1:
@@ -215,14 +215,17 @@ class AdaptiveABTest:
                 variant_success = np.sum(variant_data)
                 control_total = len(control_data)
                 variant_total = len(variant_data)
-                
+                if control_total == 0 or variant_total == 0:
+                    p_values[variant] = 1.0
+                    continue
+                    
                 expected_control_success = (control_success + variant_success) * control_total / (control_total + variant_total)
                 expected_variant_success = (control_success + variant_success) * variant_total / (control_total + variant_total)
                 expected_control_fail = (control_total + variant_total - control_success - variant_success) * control_total / (control_total + variant_total)
                 expected_variant_fail = (control_total + variant_total - control_success - variant_success) * variant_total / (control_total + variant_total)
                 
                 if min(expected_control_success, expected_variant_success, expected_control_fail, expected_variant_fail) < 5:
-                    p_values[variant] = 1.0 
+                    p_values[variant] = 1.0
                     continue
                 
                 try:
@@ -235,8 +238,8 @@ class AdaptiveABTest:
                     p_values[variant] = 1.0
             else:
                 try:
-                    _, p_value = StatisticalTest.t_test(control_data, variant_data)
-                    p_values[variant] = p_value
+                    _, p_value = stats.ttest_ind(variant_data, control_data, equal_var=False)
+                    p_values[variant] = float(p_value)
                 except:
                     p_values[variant] = 1.0
         

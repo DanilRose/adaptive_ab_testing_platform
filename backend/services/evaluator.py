@@ -1,3 +1,4 @@
+import math
 import pandas as pd
 import numpy as np
 from scipy import stats
@@ -8,6 +9,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
 warnings.filterwarnings('ignore')
+
+
+def sanitize_float(value):
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+    return value
+
 
 class GANEvaluator:
     def __init__(self, real_data, synthetic_data, scalers=None):
@@ -27,45 +36,59 @@ class GANEvaluator:
             t_stat, t_pvalue = stats.ttest_ind(real_values, synth_values)
             ks_stat, ks_pvalue = stats.ks_2samp(real_values, synth_values)
             
-            cohen_d = (real_values.mean() - synth_values.mean()) / np.sqrt(
+            pooled_std = np.sqrt(
                 (real_values.std() ** 2 + synth_values.std() ** 2) / 2
             )
+            if pooled_std != 0:
+                cohen_d = (real_values.mean() - synth_values.mean()) / pooled_std
+            else:
+                cohen_d = 0.0
             
             stats_results[feature] = {
-                't_test_pvalue': t_pvalue,
-                'ks_test_pvalue': ks_pvalue, 
-                'cohen_d': cohen_d,
-                'mean_real': real_values.mean(),
-                'mean_synth': synth_values.mean(),
-                'std_real': real_values.std(),
-                'std_synth': synth_values.std()
+                't_test_pvalue': sanitize_float(float(t_pvalue)),
+                'ks_test_pvalue': sanitize_float(float(ks_pvalue)),
+                'cohen_d': sanitize_float(float(cohen_d)),
+                'mean_real': sanitize_float(float(real_values.mean())),
+                'mean_synth': sanitize_float(float(synth_values.mean())),
+                'std_real': sanitize_float(float(real_values.std())),
+                'std_synth': sanitize_float(float(synth_values.std()))
             }
         
         common_numerical = [f for f in numerical_features if f in self.synthetic_data.columns]
         if len(common_numerical) >= 5:
             real_corr = self.real_data[common_numerical[:5]].corr()
             synth_corr = self.synthetic_data[common_numerical[:5]].corr()
-            corr_diff = (real_corr - synth_corr).abs().mean().mean()
+            corr_diff_raw = (real_corr - synth_corr).abs().mean().mean()
+            corr_diff = sanitize_float(float(corr_diff_raw))
         else:
-            corr_diff = float('inf')
+            corr_diff = None
         
         diversity_score = self._calculate_diversity()
         fid_score = self.calculate_fid_score()
         
-        print(f"FID: {fid_score:.2f}")
-        print(f"KS среднее: {np.mean([stats.ks_2samp(self.real_data[f], self.synthetic_data[f])[0] for f in numerical_features[:5]]):.4f}")
-        print(f"Разница корреляций: {corr_diff:.4f}")
+        if fid_score is not None:
+            print(f"FID: {fid_score:.2f}")
+        else:
+            print("FID: N/A")
+        if len(numerical_features) > 0:
+            ks_mean_raw = np.mean([stats.ks_2samp(self.real_data[f], self.synthetic_data[f])[0] for f in numerical_features[:5]])
+            print(f"KS среднее: {ks_mean_raw:.4f}")
+        if corr_diff is not None:
+            print(f"Разница корреляций: {corr_diff:.4f}")
         
         for feature in list(stats_results.keys())[:3]:
             real_mean = stats_results[feature]['mean_real']
             synth_mean = stats_results[feature]['mean_synth']
-            diff_pct = abs(real_mean - synth_mean) / real_mean * 100
-            print(f"{feature}: {real_mean:.1f} → {synth_mean:.1f} (Δ {diff_pct:.1f}%)")
+            if real_mean is not None and synth_mean is not None and real_mean != 0:
+                diff_pct = abs(real_mean - synth_mean) / real_mean * 100
+            else:
+                diff_pct = 0.0
+            print(f"{feature}: {real_mean} → {synth_mean} (Δ {diff_pct:.1f}%)")
         
         return {
             'statistical_tests': stats_results,
             'correlation_difference': corr_diff,
-            'diversity_score': diversity_score,
+            'diversity_score': sanitize_float(diversity_score),
             'fid_score': fid_score
         }
 
@@ -84,7 +107,7 @@ class GANEvaluator:
         y_range = pca_result[:, 1].max() - pca_result[:, 1].min()
         diversity = x_range * y_range
         
-        return diversity
+        return float(diversity) if not (math.isnan(float(diversity)) or math.isinf(float(diversity))) else 0.0
 
     def calculate_fid_score(self):
         try:
@@ -94,7 +117,7 @@ class GANEvaluator:
             common_columns = list(set(real_numerical.columns) & set(synth_numerical.columns))
             
             if not common_columns:
-                return float('inf')
+                return None
             
             if self.scalers:
                 real_scaled = real_numerical[common_columns].copy()
@@ -123,10 +146,10 @@ class GANEvaluator:
             
             fid = diff.dot(diff) + np.trace(sigma1 + sigma2 - 2 * covmean)
             
-            return fid
+            return sanitize_float(float(fid))
             
         except Exception as e:
-            return float('inf')
+            return None
 
     def plot_distributions(self, features, n_cols=3, save_path='distribution_comparison.png'):
         n_features = len(features)
