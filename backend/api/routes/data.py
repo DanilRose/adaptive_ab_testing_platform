@@ -1,5 +1,3 @@
-# backend/api/routes/data.py
-
 from datetime import datetime
 from typing import Dict, Optional
 import os
@@ -114,6 +112,8 @@ async def train_gan_model(
                 if key in effective_config:
                     effective_config[key] = value
 
+        effective_config["EPOCHS"] = request.epochs
+
         real_data = data_generator.generate_dataset(request.real_data_samples)
 
         def train_in_background(username: str, checkpoint_name_override: Optional[str]):
@@ -169,6 +169,10 @@ async def train_gan_model(
                                 "final_d_loss": gan_service.gan_model.d_losses[-1] if gan_service.gan_model.d_losses else None,
                             },
                         )
+                    # Устанавливаем имя чекпоинта и статус после успешного сохранения
+                    checkpoint_name_clean = checkpoint_name[:-4] if checkpoint_name.endswith('.pth') else checkpoint_name
+                    gan_service.loaded_checkpoint_name = checkpoint_name_clean
+                    gan_service.current_status = "checkpoint_loaded"
                     print(f" Чекпоинт '{checkpoint_name}' успешно сохранен в БД")
             except Exception as e:
                 print(f" Background training error: {e}")
@@ -208,7 +212,11 @@ async def generate_synthetic_data(
         if not gan_service.is_trained:
             raise HTTPException(status_code=400, detail="GAN модель не обучена. Сначала обучите модель.")
 
-        synthetic_data = gan_service.generate_synthetic_data(request.num_users)
+        synthetic_data = gan_service.generate_synthetic_data(
+            request.num_users,
+            filters=request.filters,
+            dataset_name=request.dataset_name,
+        )
 
         if synthetic_data is None:
             raise HTTPException(status_code=500, detail="Ошибка генерации синтетических данных")
@@ -228,6 +236,7 @@ async def generate_synthetic_data(
             preview_json=synthetic_data.head(10).to_dict("records"),
             extra_metadata={
                 "generated_by": current_user.username,
+                "dataset_name": request.dataset_name,
                 "records": synthetic_data.to_dict("records"),
             },
         )
@@ -238,65 +247,14 @@ async def generate_synthetic_data(
         raise HTTPException(status_code=500, detail=f"Ошибка генерации синтетических данных: {str(e)}")
 
 
-@router.post("/load-pretrained", summary="Загрузить предобученную модель")
-async def load_pretrained_model(
-    checkpoint_path: str,
-    current_user: User = Depends(require_role("developer", "analyst")),
-    db: Session = Depends(get_db),
-):
-    try:
-        checkpoint = crud.get_checkpoint_by_name(db, checkpoint_path) or crud.get_checkpoint_by_file_path(db, checkpoint_path)
-        if checkpoint is None:
-            raise HTTPException(status_code=404, detail="Чекпоинт не найден в БД")
-
-        payload_hex = (checkpoint.metrics_json or {}).get("binary")
-        if not payload_hex:
-            raise HTTPException(status_code=400, detail="В БД отсутствует бинарный payload чекпоинта")
-
-        checkpoint_bytes = bytes.fromhex(payload_hex)
-        with tempfile.NamedTemporaryFile(suffix=".pth", delete=False) as tmp_file:
-            tmp_file.write(checkpoint_bytes)
-            tmp_file_path = tmp_file.name
-
-        success = gan_service.load_pretrained_model(tmp_file_path)
-        os.unlink(tmp_file_path)
-
-        if success:
-            crud.upsert_checkpoint(
-                db,
-                name=checkpoint.name,
-                file_path=checkpoint.file_path,
-                version=checkpoint.version,
-                epoch=checkpoint.epoch,
-                metrics_json={**(checkpoint.metrics_json or {}), "loaded_by": current_user.username},
-            )
-            return {
-                "status": "success",
-                "message": f"Модель загружена из {checkpoint.name}",
-                "is_trained": gan_service.is_trained,
-            }
-        raise HTTPException(status_code=400, detail="Не удалось загрузить модель")
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка загрузки модели: {str(e)}")
-
-
 @router.get("/dataset-stats", summary="Статистика datasets")
 async def get_dataset_stats(current_user: User = Depends(require_role("developer", "analyst"))):
     try:
-        sample_real_data = data_generator.generate_dataset(1000)
-        real_stats = sample_real_data.describe().to_dict()
-        
+        # Кешированные опции фильтров - не нужно генерировать данные
         filter_options = data_generator.get_filter_options()
-
-        return {
-            "real_data_statistics": real_stats,
-            "available_features": list(sample_real_data.columns),
-            "data_types": {col: str(dtype) for col, dtype in sample_real_data.dtypes.items()},
-            **filter_options,
-        }
+        
+        # Возвращаем только опции фильтров без генерации реальных данных
+        return filter_options
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка получения статистики: {str(e)}")
@@ -318,6 +276,15 @@ async def get_generated_history(
                     "sample_count": r.sample_count,
                     "file_path": r.file_path,
                     "storage": "database_only",
+                    "dataset_name": (r.extra_metadata or {}).get("dataset_name"),
+                    "preview_json": r.preview_json,
+                    # Убираем огромный records из extra_metadata для быстрой загрузки
+                    "extra_metadata": {
+                        "generated_by": (r.extra_metadata or {}).get("generated_by"),
+                        "dataset_name": (r.extra_metadata or {}).get("dataset_name"),
+                        "include_evaluation": (r.extra_metadata or {}).get("include_evaluation"),
+                        "records_count": len((r.extra_metadata or {}).get("records", [])),
+                    },
                     "created_at": r.created_at.isoformat() if r.created_at else None,
                 }
                 for r in rows
@@ -335,16 +302,8 @@ async def get_gan_checkpoints(
 ):
     try:
         checkpoints = crud.list_checkpoints(db, limit=100, only_with_binary=True)
-        gan_service.set_available_checkpoints([
-            {
-                "filename": c.name,
-                "size": (c.metrics_json or {}).get("size"),
-                "modified": c.created_at,
-                "path": c.file_path,
-            }
-            for c in checkpoints
-        ])
-
+        
+        # Возвращаем минимальную информацию без бинарных данных для быстрой загрузки
         return {
             "checkpoints": [
                 {
@@ -353,7 +312,13 @@ async def get_gan_checkpoints(
                     "file_path": c.file_path,
                     "version": c.version,
                     "epoch": c.epoch,
-                    "metrics": c.metrics_json,
+                    "metrics": {
+                        "trained_by": (c.metrics_json or {}).get("trained_by"),
+                        "loaded_by": (c.metrics_json or {}).get("loaded_by"),
+                        "size": (c.metrics_json or {}).get("size"),
+                        "final_g_loss": (c.metrics_json or {}).get("final_g_loss"),
+                        "final_d_loss": (c.metrics_json or {}).get("final_d_loss"),
+                    },
                     "created_at": c.created_at.isoformat() if c.created_at else None,
                 }
                 for c in checkpoints
@@ -422,6 +387,66 @@ async def stop_gan_training(
         raise HTTPException(status_code=500, detail=f"Ошибка остановки обучения: {str(e)}")
 
 
+@router.post("/resume-gan-training", summary="Возобновить обучение GAN")
+async def resume_gan_training(
+    current_user: User = Depends(require_role("developer", "analyst")),
+):
+    try:
+        success = gan_service.resume_training()
+        if success:
+            return {"status": "resumed", "message": "Обучение возобновлено"}
+        return {"status": "cannot_resume", "message": "Невозможно возобновить обучение"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка возобновления обучения: {str(e)}")
+
+
+@router.post("/reset-gan-training", summary="Сбросить обучение GAN")
+async def reset_gan_training(
+    current_user: User = Depends(require_role("developer", "analyst")),
+):
+    try:
+        success = gan_service.reset_training()
+        if success:
+            return {"status": "reset", "message": "Обучение GAN сброшено"}
+        return {"status": "error", "message": "Не удалось сбросить обучение"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка сброса обучения: {str(e)}")
+
+
+@router.delete("/generated-history/{item_id}", summary="Удалить запись синтетического датасета")
+async def delete_generated_history_item(
+    item_id: int,
+    current_user: User = Depends(require_role("developer", "analyst")),
+    db: Session = Depends(get_db),
+):
+    try:
+        success = crud.delete_generated_data_by_id(db, item_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Запись не найдена")
+        return {"status": "deleted", "id": item_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка удаления записи: {str(e)}")
+
+
+@router.delete("/gan-checkpoints/{checkpoint_id}", summary="Удалить чекпоинт")
+async def delete_gan_checkpoint(
+    checkpoint_id: int,
+    current_user: User = Depends(require_role("developer", "analyst")),
+    db: Session = Depends(get_db),
+):
+    try:
+        success = crud.delete_checkpoint_by_id(db, checkpoint_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Чекпоинт не найден")
+        return {"status": "deleted", "id": checkpoint_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка удаления чекпоинта: {str(e)}")
+
+
 @router.post("/run-ab-test-simulation", summary="Запустить симуляцию A/B теста")
 async def run_ab_test_simulation(
     request: dict,
@@ -439,3 +464,28 @@ async def run_ab_test_simulation(
         return {"status": "simulation_started", "message": "Симуляция A/B теста запущена"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка симуляции: {str(e)}")
+
+
+@router.get("/generated-history/{item_id}/full", summary="Получить полный датасет")
+async def get_full_dataset(
+    item_id: int,
+    current_user: User = Depends(require_role("developer", "analyst")),
+    db: Session = Depends(get_db),
+):
+    try:
+        dataset = crud.get_generated_data_by_id(db, item_id)
+        if not dataset:
+            raise HTTPException(status_code=404, detail="Датасет не найден")
+        
+        return {
+            "id": dataset.id,
+            "data_type": dataset.data_type,
+            "sample_count": dataset.sample_count,
+            "dataset_name": (dataset.extra_metadata or {}).get("dataset_name"),
+            "records": (dataset.extra_metadata or {}).get("records", []),
+            "preview_json": dataset.preview_json,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка получения датасета: {str(e)}")

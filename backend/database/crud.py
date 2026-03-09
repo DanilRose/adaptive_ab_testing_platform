@@ -1,5 +1,3 @@
-# backend/database/crud.py
-
 from __future__ import annotations
 
 from typing import Any, Optional
@@ -141,13 +139,13 @@ def upsert_checkpoint(
     return checkpoint
 
 
-def list_checkpoints(db: Session, limit: int = 100, *, only_with_binary: bool = False) -> list[CheckpointORM]:
+def list_checkpoints(db: Session, limit: int = 100, *, only_with_binary: bool = False, exclude_binary: bool = False) -> list[CheckpointORM]:
     query = db.query(CheckpointORM)
     if only_with_binary:
         metrics_json = CheckpointORM.metrics_json.cast(JSONB)
         binary_value = metrics_json["binary"].astext
         query = query.filter(
-            metrics_json.has_key("binary"),  # noqa: W601
+            metrics_json.has_key("binary"),
             func.length(func.coalesce(binary_value, "")) > 0,
         )
     return query.order_by(CheckpointORM.created_at.desc()).limit(limit).all()
@@ -162,15 +160,34 @@ def get_checkpoint_by_file_path(db: Session, file_path: str) -> Optional[Checkpo
 
 
 def get_test(db: Session, test_id: str) -> Optional[ABTestORM]:
-    """Alias for get_ab_test_by_test_id - for backward compatibility"""
     return get_ab_test_by_test_id(db, test_id)
 
 
 def update_test_status(db: Session, test_id: str, status: str) -> Optional[ABTestORM]:
-    """Update test status by test_id - alias for update_ab_test_status"""
     return update_ab_test_status(db, test_id, status)
 
 
 def get_all_checkpoints(db: Session) -> list[CheckpointORM]:
-    """Get all GAN checkpoints from database"""
     return db.query(CheckpointORM).order_by(CheckpointORM.created_at.desc()).all()
+
+
+def get_generated_data_by_id(db: Session, item_id: int) -> Optional[GeneratedDataORM]:
+    return db.query(GeneratedDataORM).filter(GeneratedDataORM.id == item_id).first()
+
+
+def delete_generated_data_by_id(db: Session, item_id: int) -> bool:
+    entity = get_generated_data_by_id(db, item_id)
+    if entity is None:
+        return False
+    db.delete(entity)
+    db.commit()
+    return True
+
+
+def delete_checkpoint_by_id(db: Session, checkpoint_id: int) -> bool:
+    checkpoint = db.query(CheckpointORM).filter(CheckpointORM.id == checkpoint_id).first()
+    if checkpoint is None:
+        return False
+    db.delete(checkpoint)
+    db.commit()
+    return True

@@ -6,6 +6,7 @@ import type { UserRole } from './types';
 import { Dashboard } from './components/Dashboard/Dashboard';
 import { TestCreator } from './components/TestCreator/TestCreator';
 import { GANManager } from './components/GANManager/GANManager';
+import { TemplatesPage } from './components/Templates/TemplatesPage';
 import { LoginPage } from './components/Auth/LoginPage';
 import { ProtectedRoute } from './components/Auth/ProtectedRoute';
 import { useAuth } from './context/AuthContext';
@@ -30,6 +31,7 @@ const menuRoutes: MenuRouteItem[] = [
   { key: '/create-test', path: '/create-test', label: 'Создать тест', allowedRoles: ['developer', 'analyst'] },
   { key: '/gan-manager', path: '/gan-manager', label: 'GAN Менеджер', allowedRoles: ['developer', 'analyst'] },
   { key: '/results', path: '/results', label: 'Результаты', allowedRoles: ['developer', 'manager'] },
+  { key: '/templates', path: '/templates', label: 'Шаблоны', allowedRoles: ['developer', 'analyst'] },
 ];
 
 const ForbiddenPage: React.FC = () => (
@@ -163,6 +165,17 @@ const AppRoutes: React.FC = () => {
           <ProtectedRoute allowedRoles={['developer', 'manager']}>
             <AuthorizedLayout>
               <div>Results Page</div>
+            </AuthorizedLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/templates"
+        element={
+          <ProtectedRoute allowedRoles={['developer', 'analyst']}>
+            <AuthorizedLayout>
+              <TemplatesPage />
             </AuthorizedLayout>
           </ProtectedRoute>
         }

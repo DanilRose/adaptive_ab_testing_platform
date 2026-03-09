@@ -65,6 +65,12 @@ services:
       - PGADMIN_DEFAULT_EMAIL=admin@example.com
       - PGADMIN_DEFAULT_PASSWORD=admin123
       - PGADMIN_LISTEN_PORT=5050
+      - PGADMIN_CONFIG_SESSION_COOKIE_SECURE=False
+      - PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION=True
+      - PGADMIN_CONFIG_WTF_CSRF_ENABLED=True
+      - PGADMIN_CONFIG_WTF_CSRF_CHECK_DEFAULT=False
+      - PGADMIN_CONFIG_SESSION_COOKIE_SAMESITE='Lax'
+      - GUNICORN_TIMEOUT=60
     ports:
       - "5050:5050"
     volumes:
@@ -73,6 +79,7 @@ services:
       - postgres
     networks:
       - ab-testing-network
+    restart: unless-stopped
 
 volumes:
   postgres_data:

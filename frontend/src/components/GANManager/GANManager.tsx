@@ -1,4 +1,3 @@
-// frontend/src/components/GANManager/GANManager.tsx
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   Card,
@@ -22,12 +21,12 @@ import {
   Tabs,
   Table,
   Switch,
+  Popconfirm,
 } from 'antd';
-import { PlusOutlined, ReloadOutlined, FilterOutlined, EyeOutlined, DownloadOutlined, StopOutlined, QuestionCircleOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, DownloadOutlined, StopOutlined, QuestionCircleOutlined, DeleteOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { dataAPI } from '../../utils/api';
 import type { GANTrainingPayload, SyntheticGenerationPayload } from '../../types';
 
-type SelectValue = string | number | undefined;
 interface GANTuningForm extends GANTrainingPayload {
   LATENT_DIM?: number;
   BATCH_SIZE?: number;
@@ -115,52 +114,18 @@ const GAN_CONFIG_FIELDS: Array<{ name: keyof GANTuningForm; label: string; toolt
   },
 ];
 
-const GAN_GLOSSARY = [
-  {
-    term: 'Эпохи',
-    description: 'Количество полных проходов по всему датасету. Больше эпох = лучше качество, но дольше обучение',
-  },
-  {
-    term: 'Samples для обучения',
-    description: 'Количество реальных примеров данных, используемых для обучения GAN',
-  },
-  {
-    term: 'Генератор',
-    description: 'Нейросеть, которая создает синтетические данные из случайного шума',
-  },
-  {
-    term: 'Дискриминатор',
-    description: 'Нейросеть, которая отличает реальные данные от синтетических',
-  },
-  {
-    term: 'G Loss',
-    description: 'Ошибка генератора. Чем меньше, тем лучше генератор обманывает дискриминатор',
-  },
-  {
-    term: 'D Loss',
-    description: 'Ошибка дискриминатора. Показывает, насколько хорошо он отличает реальные данные от синтетических',
-  },
-  {
-    term: 'Wasserstein Distance',
-    description: 'Метрика качества обучения WGAN. Меньше = лучше. Показывает "расстояние" между распределениями',
-  },
-];
-
 export const GANManager: React.FC = () => {
   const [ganStatus, setGanStatus] = useState<any>({});
   const [checkpoints, setCheckpoints] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [training, setTraining] = useState(false);
-  const [loadModalVisible, setLoadModalVisible] = useState(false);
   const [configForm] = Form.useForm<GANTuningForm>();
   const [syntheticForm] = Form.useForm<SyntheticFormValues>();
   const [filterOptions, setFilterOptions] = useState<any>(null);
   const [generatedHistory, setGeneratedHistory] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [dataPreviewModal, setDataPreviewModal] = useState<{ visible: boolean; dataset?: any }>({ visible: false });
-  const [filtersModalVisible, setFiltersModalVisible] = useState(false);
   const [filterDraft, setFilterDraft] = useState<Record<string, any>>({});
-  const [glossaryVisible, setGlossaryVisible] = useState(false);
 
   useEffect(() => {
     configForm.setFieldsValue({
@@ -300,6 +265,26 @@ export const GANManager: React.FC = () => {
     }
   };
 
+  const handleResumeTraining = async () => {
+    try {
+      await dataAPI.resumeGANTraining();
+      message.success('Обучение возобновлено');
+      loadGANStatus();
+    } catch (error: any) {
+      message.error('Ошибка возобновления обучения: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
+  const handleResetTraining = async () => {
+    try {
+      await dataAPI.resetGANTraining();
+      message.success('Обучение GAN сброшено');
+      loadGANStatus();
+    } catch (error: any) {
+      message.error('Ошибка сброса обучения: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
   const handleGenerateData = async () => {
     try {
       const values = await syntheticForm.validateFields();
@@ -326,7 +311,6 @@ export const GANManager: React.FC = () => {
     try {
       await dataAPI.loadGANCheckpoint(checkpointName);
       message.success(`Модель загружена из ${checkpointName}`);
-      setLoadModalVisible(false);
       loadGANStatus();
     } catch (error: any) {
       console.error(' Load checkpoint error:', error);
@@ -481,54 +465,91 @@ export const GANManager: React.FC = () => {
 
   const handleClearFilters = () => setFilterDraft({});
 
-  const handleDownloadCSV = () => {
-    if (!dataPreviewModal.dataset) return;
-    
-    const records = dataPreviewModal.dataset.extra_metadata?.records || dataPreviewModal.dataset.synthetic_preview || [];
+  const getDatasetRecords = (dataset: any) => {
+    return dataset?.records || dataset?.synthetic_preview || dataset?.preview_json || [];
+  };
+
+  const downloadDatasetAsCSV = (dataset: any) => {
+    if (!dataset) return;
+
+    const records = getDatasetRecords(dataset);
     if (records.length === 0) {
       message.warning('Нет данных для скачивания');
       return;
     }
 
-    // Конвертируем в CSV
     const headers = Object.keys(records[0]);
     const csvContent = [
       headers.join(','),
-      ...records.map((row: any) => 
-        headers.map(header => {
-          const value = row[header];
-          if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
-            return `"${value.replace(/"/g, '""')}"`;
-          }
-          return value;
-        }).join(',')
-      )
+      ...records.map((row: any) =>
+        headers
+          .map((header) => {
+            const value = row[header];
+            if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
+              return `"${value.replace(/"/g, '""')}"`;
+            }
+            return value;
+          })
+          .join(','),
+      ),
     ].join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
-    const filename = dataPreviewModal.dataset.dataset_name 
-      ? `${dataPreviewModal.dataset.dataset_name}.csv`
-      : `synthetic_data_${new Date().toISOString().slice(0, 10)}.csv`;
-    
+    const filename = dataset.dataset_name ? `${dataset.dataset_name}.csv` : `synthetic_data_${new Date().toISOString().slice(0, 10)}.csv`;
+
     link.setAttribute('href', url);
     link.setAttribute('download', filename);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    
+
     message.success(`Файл ${filename} скачан`);
   };
 
-  const historyColumns = (
-    onPreview?: (record: any) => void,
-  ) => [
+  const handleDownloadCSV = async () => {
+    if (!dataPreviewModal.dataset?.id) return;
+    
+    try {
+      // Загружаем полный датасет только при скачивании
+      const response = await dataAPI.getFullDataset(dataPreviewModal.dataset.id);
+      downloadDatasetAsCSV(response.data);
+    } catch (error: any) {
+      message.error('Ошибка загрузки данных: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
+  const handleDeleteDatasetHistoryItem = async (id: number) => {
+    try {
+      await dataAPI.deleteGeneratedHistoryItem(id);
+      message.success('Запись о CSV удалена');
+      await loadGeneratedHistory();
+      if (dataPreviewModal.dataset?.id === id) {
+        setDataPreviewModal({ visible: false });
+      }
+    } catch (error: any) {
+      message.error('Ошибка удаления записи: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
+  const handleDeleteCheckpoint = async (id: number) => {
+    try {
+      await dataAPI.deleteGANCheckpoint(id);
+      message.success('Чекпоинт удален');
+      await loadCheckpoints();
+      await loadGANStatus();
+    } catch (error: any) {
+      message.error('Ошибка удаления чекпоинта: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
+  const historyColumns = (onPreview?: (record: any) => void) => [
     {
-      title: 'Тип',
-      dataIndex: 'data_type',
-      render: (value: string) => <Tag color={value === 'synthetic' ? 'purple' : 'blue'}>{value}</Tag>,
+      title: 'Название набора',
+      dataIndex: 'dataset_name',
+      render: (value: string | undefined) => value || 'Без имени',
     },
     {
       title: 'Кол-во',
@@ -539,56 +560,101 @@ export const GANManager: React.FC = () => {
       dataIndex: 'created_at',
       render: (value: string) => (value ? new Date(value).toLocaleString() : '—'),
     },
+    {
+      title: 'Действия',
+      key: 'actions',
+      render: (_: any, record: any) => (
+        <Space>
+          <Button type="link" onClick={() => onPreview?.(record)}>
+            Просмотр
+          </Button>
+          <Button type="link" icon={<DownloadOutlined />} onClick={() => downloadDatasetAsCSV(record)}>
+            Скачать CSV
+          </Button>
+          <Popconfirm title="Удалить запись о CSV?" onConfirm={() => handleDeleteDatasetHistoryItem(record.id)}>
+            <Button type="link" danger icon={<DeleteOutlined />}>
+              Удалить
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
   ];
 
-  const isTraining = ganStatus.status?.includes('training') || false;
+  const isTraining = ganStatus.status === 'training';
+  const isStopped = ganStatus.status === 'training_paused';
+  const isTrainingOrStopped = isTraining || isStopped;
 
   const getFriendlyStatus = () => {
-    if (!ganStatus.status) return 'Не инициализирован';
-    if (ganStatus.status.includes('error')) return 'Ошибка';
-    if (ganStatus.status.includes('training')) {
-      const progress = ganStatus.training_progress || 0;
-      return `Обучение: ${progress}% (эпоха ${ganStatus.current_epoch}/${ganStatus.total_epochs})`;
+    // Статус 1.1: Чекпоинт не загружен
+    if (ganStatus.status === 'checkpoint_not_loaded' || !ganStatus.status) {
+      return 'Чекпоинт не загружен';
     }
-    if (ganStatus.status === 'trained') return 'Обучена';
-    if (ganStatus.status === 'initialized') return 'Инициализирована';
+    
+    // Статус 1.2: Загружен чекпоинт: Имя чекпоинта
+    if (ganStatus.status === 'checkpoint_loaded' && ganStatus.loaded_checkpoint_name) {
+      return `Загружен чекпоинт: ${ganStatus.loaded_checkpoint_name}`;
+    }
+    
+    // Статус 1.3: Обучение: 0/N эпох
+    if (ganStatus.status === 'training') {
+      return `Обучение: ${ganStatus.current_epoch}/${ganStatus.total_epochs} эпох`;
+    }
+    
+    // Статус 1.4: Пауза обучения: 0/N эпох
+    if (ganStatus.status === 'training_paused') {
+      return `Пауза обучения: ${ganStatus.current_epoch}/${ganStatus.total_epochs} эпох`;
+    }
+    
+    // Обработка ошибок
+    if (ganStatus.status?.includes('error')) {
+      return `Ошибка: ${ganStatus.status.replace('error: ', '')}`;
+    }
+    
+    // Fallback на случай неизвестного статуса
     return ganStatus.status;
   };
 
   return (
     <div style={{ padding: '20px' }}>
       <Row gutter={[16, 16]}>
-        <Col span={6}>
+        <Col span={8}>
           <Card>
             <Statistic
               title="Статус GAN"
               value={getFriendlyStatus()}
-              valueStyle={{ color: ganStatus.status?.includes('error') ? 'red' : ganStatus.is_trained ? 'green' : 'gray' }}
+              valueStyle={{
+                color: ganStatus.status?.includes('error')
+                  ? 'red'
+                  : (ganStatus.status === 'training' || ganStatus.status === 'training_paused')
+                    ? '#1890ff'
+                    : ganStatus.is_trained
+                      ? 'green'
+                      : 'gray'
+              }}
             />
           </Card>
         </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="Обучена"
-              value={ganStatus.is_trained ? 'Да' : 'Нет'}
-              valueStyle={{ color: ganStatus.is_trained ? 'green' : 'red' }}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
+        <Col span={8}>
           <Card>
             <Statistic title="Чекпоинты" value={ganStatus.available_checkpoints || 0} />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col span={8}>
           <Card>
-            <Statistic title="Эпох обучения" value={ganStatus.loss_history?.total_epochs || 0} />
+            <Statistic
+              title="Эпох обучения"
+              value={
+                ganStatus.is_trained && ganStatus.loss_history?.total_epochs
+                  ? ganStatus.loss_history.total_epochs
+                  : 'Загрузите модель для отображения'
+              }
+            />
           </Card>
         </Col>
       </Row>
       {ganStatus.config && Object.keys(ganStatus.config).length > 0 && (
-        <Card title="Текущая конфигурация модели" style={{ marginTop: 20 }}>
+        <Card title={!ganStatus.is_trained && !isTraining ? "Последняя конфигурация обучаемой модели" : "Текущая конфигурация модели"} style={{ marginTop: 20 }}>
           <Descriptions bordered column={3}>
             <Descriptions.Item label="Эпохи">{ganStatus.config.EPOCHS || 'N/A'}</Descriptions.Item>
             <Descriptions.Item label="Размер батча">{ganStatus.config.BATCH_SIZE || 'N/A'}</Descriptions.Item>
@@ -621,16 +687,16 @@ export const GANManager: React.FC = () => {
               label: 'Конфигурация и обучение GAN',
               children: (
                 <Form form={configForm} layout="vertical">
-                  {isTraining && (
+                  {isTrainingOrStopped && (
                     <div style={{ marginBottom: 24, padding: 16, background: '#f0f2f5', borderRadius: 8 }}>
                       <div style={{ marginBottom: 12 }}>
-                        <Tag color="processing" style={{ fontSize: 14, padding: '4px 12px' }}>
+                        <Tag color={isStopped ? "warning" : "processing"} style={{ fontSize: 14, padding: '4px 12px' }}>
                           {getFriendlyStatus()}
                         </Tag>
                       </div>
                       <Progress
                         percent={Math.min(100, ganStatus.training_progress || 0)}
-                        status="active"
+                        status={isStopped ? "exception" : "active"}
                         strokeColor={{ '0%': '#108ee9', '100%': '#87d068' }}
                       />
                       <div style={{ marginTop: 8, color: '#666' }}>
@@ -639,88 +705,147 @@ export const GANManager: React.FC = () => {
                     </div>
                   )}
                   
-                  <Row gutter={16}>
-                    <Col span={8}>
-                      <Form.Item name="epochs" label="Эпох" rules={[{ required: true, message: 'Укажите количество эпох' }]}>
-                        <InputNumber min={10} max={500} style={{ width: '100%' }} />
-                      </Form.Item>
-                    </Col>
-                    <Col span={8}>
-                      <Form.Item
-                        name="real_data_samples"
-                        label="Samples для обучения"
-                        rules={[{ required: true, message: 'Укажите количество примеров' }]}
-                      >
-                        <InputNumber min={1000} max={100000} step={1000} style={{ width: '100%' }} />
-                      </Form.Item>
-                    </Col>
-                    <Col span={8}>
-                      <Form.Item name="save_checkpoint" label="Сохранять чекпоинт" valuePropName="checked">
-                        <Switch defaultChecked />
-                      </Form.Item>
-                    </Col>
-                  </Row>
-                  <Row gutter={16}>
-                    <Col span={12}>
-                      <Form.Item name="checkpoint_name" label="Имя чекпоинта" rules={[{ required: true, message: 'Укажите имя чекпоинта' }]}>
-                        <Input placeholder="Например, best_wgan_config" />
-                      </Form.Item>
-                    </Col>
-                  </Row>
-
-                  <Divider orientation="left">Переопределение конфигурации</Divider>
-                  <Row gutter={16}>
-                    {GAN_CONFIG_FIELDS.map((field) => (
-                      <Col span={12} key={field.name} style={{ marginBottom: 16 }}>
-                        <Form.Item
-                          name={field.name}
-                          label={
-                            <span>
-                              {field.label}
-                              {field.tooltip && (
-                                <Tooltip title={field.tooltip}>
-                                  <QuestionCircleOutlined style={{ marginLeft: 8, color: '#1890ff' }} />
-                                </Tooltip>
-                              )}
-                            </span>
-                          }
-                          valuePropName={field.type === 'boolean' ? 'checked' : undefined}
-                        >
-                          {field.type === 'number' ? (
-                            <InputNumber
-                              min={field.min}
-                              max={field.max}
-                              step={field.step}
-                              style={{ width: '100%' }}
-                              placeholder="По умолчанию"
-                            />
-                          ) : field.type === 'text' ? (
-                            <Input placeholder="Например: 512,256,128" />
-                          ) : (
-                            <Switch />
-                          )}
-                        </Form.Item>
-                      </Col>
-                    ))}
-                  </Row>
-
-                  <Space>
-                    <Button type="primary" onClick={handleTrainGAN} loading={training} disabled={isTraining} icon={<PlusOutlined />}>
-                      Обучить GAN с нуля
-                    </Button>
+                  <Space style={{ marginBottom: 16 }} wrap>
+                    {!isTrainingOrStopped && (
+                      <Button type="primary" onClick={handleTrainGAN} loading={training} icon={<PlusOutlined />}>
+                        Обучить GAN с нуля
+                      </Button>
+                    )}
                     {isTraining && (
                       <Button danger onClick={handleStopTraining} icon={<StopOutlined />}>
                         Остановить обучение
                       </Button>
                     )}
-                    <Button onClick={() => configForm.resetFields()} icon={<ReloadOutlined />}>Сбросить форму</Button>
-                    <Button onClick={() => setLoadModalVisible(true)} disabled={isTraining}>
-                      Загрузить чекпоинт
-                    </Button>
-                    <Button icon={<QuestionCircleOutlined />} onClick={() => setGlossaryVisible(true)}>
-                      Глоссарий GAN
-                    </Button>
+                    {isStopped && (
+                      <>
+                        <Button
+                          type="primary"
+                          onClick={handleResumeTraining}
+                          icon={<PlayCircleOutlined />}
+                        >
+                          Возобновить обучение
+                        </Button>
+                        <Popconfirm
+                          title="Сбросить обучение GAN?"
+                          description="Это полностью отменит текущее обучение. Чекпоинт не сохранится."
+                          onConfirm={handleResetTraining}
+                          okText="Да, сбросить"
+                          cancelText="Отмена"
+                        >
+                          <Button danger icon={<DeleteOutlined />}>
+                            Сбросить обучение GAN
+                          </Button>
+                        </Popconfirm>
+                      </>
+                    )}
+                    {isTraining && (
+                      <Button disabled icon={<PlayCircleOutlined />} style={{ color: '#d9d9d9' }}>
+                        Возобновить обучение
+                      </Button>
+                    )}
+                    {!isTrainingOrStopped && (
+                      <Button onClick={() => configForm.resetFields()} icon={<ReloadOutlined />}>Сбросить форму</Button>
+                    )}
                   </Space>
+
+                  {!isTrainingOrStopped && (
+                    <>
+                      <Row gutter={16}>
+                        <Col span={8}>
+                          <Form.Item name="epochs" label="Эпох" rules={[{ required: true, message: 'Укажите количество эпох' }]}>
+                            <InputNumber min={10} max={500} style={{ width: '100%' }} />
+                          </Form.Item>
+                        </Col>
+                        <Col span={8}>
+                          <Form.Item
+                            name="real_data_samples"
+                            label="Samples для обучения"
+                            rules={[{ required: true, message: 'Укажите количество примеров' }]}
+                          >
+                            <InputNumber min={1000} max={100000} step={1000} style={{ width: '100%' }} />
+                          </Form.Item>
+                        </Col>
+                        <Col span={8}>
+                          <Form.Item name="save_checkpoint" label="Сохранять чекпоинт" valuePropName="checked">
+                            <Switch defaultChecked />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                      <Row gutter={16}>
+                        <Col span={12}>
+                          <Form.Item name="checkpoint_name" label="Имя чекпоинта" rules={[{ required: true, message: 'Укажите имя чекпоинта' }]}>
+                            <Input placeholder="Например, best_wgan_config" />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+
+                      <Divider orientation="left">Переопределение конфигурации</Divider>
+                      <Row gutter={16}>
+                        {GAN_CONFIG_FIELDS.map((field) => (
+                          <Col span={12} key={field.name} style={{ marginBottom: 16 }}>
+                            <Form.Item
+                              name={field.name}
+                              label={
+                                <span>
+                                  {field.label}
+                                  {field.tooltip && (
+                                    <Tooltip title={field.tooltip}>
+                                      <QuestionCircleOutlined style={{ marginLeft: 8, color: '#1890ff' }} />
+                                    </Tooltip>
+                                  )}
+                                </span>
+                              }
+                              valuePropName={field.type === 'boolean' ? 'checked' : undefined}
+                            >
+                              {field.type === 'number' ? (
+                                <InputNumber
+                                  min={field.min}
+                                  max={field.max}
+                                  step={field.step}
+                                  style={{ width: '100%' }}
+                                  placeholder="По умолчанию"
+                                />
+                              ) : field.type === 'text' ? (
+                                <Input placeholder="Например: 512,256,128" />
+                              ) : (
+                                <Switch />
+                              )}
+                            </Form.Item>
+                          </Col>
+                        ))}
+                      </Row>
+                    </>
+                  )}
+
+                  <Divider orientation="left">Доступные чекпоинты</Divider>
+                  <List
+                    dataSource={checkpoints}
+                    locale={{ emptyText: 'Нет доступных чекпоинтов' }}
+                    renderItem={(checkpoint: any) => (
+                      <List.Item
+                        actions={[
+                          <Button type="link" onClick={() => handleLoadCheckpoint(checkpoint.name || checkpoint.filename)} disabled={isTrainingOrStopped}>
+                            Загрузить
+                          </Button>,
+                          <Popconfirm title="Удалить чекпоинт?" onConfirm={() => handleDeleteCheckpoint(checkpoint.id)}>
+                            <Button type="link" danger icon={<DeleteOutlined />}>
+                              Удалить
+                            </Button>
+                          </Popconfirm>,
+                        ]}
+                      >
+                        <List.Item.Meta
+                          title={checkpoint.name || checkpoint.filename}
+                          description={
+                            <div>
+                              <div>Размер: {checkpoint.metrics?.size ? `${(checkpoint.metrics.size / 1024 / 1024).toFixed(2)} MB` : 'N/A'}</div>
+                              <div>Изменен: {checkpoint.created_at ? new Date(checkpoint.created_at).toLocaleString() : 'N/A'}</div>
+                            </div>
+                          }
+                        />
+                      </List.Item>
+                    )}
+                  />
                 </Form>
               ),
             },
@@ -731,7 +856,18 @@ export const GANManager: React.FC = () => {
                 <Form form={syntheticForm} layout="vertical">
                   <Row gutter={16}>
                     <Col span={6}>
-                      <Form.Item name="num_users" label="Кол-во пользователей" rules={[{ required: true }]}> 
+                      <Form.Item
+                        name="num_users"
+                        label={
+                          <span>
+                            Кол-во пользователей
+                            <Tooltip title="Функция генерирует синтетических пользователей на основе обученной GAN-модели и выбранных фильтров.">
+                              <QuestionCircleOutlined style={{ marginLeft: 8, color: '#1890ff' }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        rules={[{ required: true }]}
+                      >
                         <InputNumber min={100} max={100000} step={100} style={{ width: '100%' }} />
                       </Form.Item>
                     </Col>
@@ -746,16 +882,18 @@ export const GANManager: React.FC = () => {
                       </Form.Item>
                     </Col>
                   </Row>
-                  <Space style={{ marginBottom: 16 }}>
-                    <Button icon={<FilterOutlined />} onClick={() => setFiltersModalVisible(true)}>
-                      Настроить фильтры
-                    </Button>
-                    {Object.keys(filterDraft).length > 0 && (
+                  <Divider orientation="left">Фильтры генерации</Divider>
+                  {filterControls}
+                  {Object.keys(filterDraft).length > 0 && (
+                    <div style={{ marginTop: 12, marginBottom: 16 }}>
                       <Tag color="green">Используются фильтры ({Object.keys(filterDraft).length})</Tag>
-                    )}
-                  </Space>
+                      <Button type="link" onClick={handleClearFilters}>
+                        Очистить фильтры
+                      </Button>
+                    </div>
+                  )}
                   <Space>
-                    <Button type="primary" onClick={handleGenerateData} loading={loading} disabled={!ganStatus.is_trained || isTraining} icon={<PlusOutlined />}>
+                    <Button type="primary" onClick={handleGenerateData} loading={loading} disabled={!ganStatus.is_trained || isTrainingOrStopped} icon={<PlusOutlined />}>
                       Сгенерировать данные
                     </Button>
                     <Button onClick={() => syntheticForm.resetFields()} icon={<ReloadOutlined />}>Сбросить форму</Button>
@@ -765,9 +903,7 @@ export const GANManager: React.FC = () => {
                   <Table
                     rowKey="id"
                     dataSource={generatedHistory.filter((item) => item.data_type === 'synthetic')}
-                    columns={historyColumns((record) =>
-                      setDataPreviewModal({ visible: true, dataset: record.extra_metadata || record }),
-                    )}
+                    columns={historyColumns((record) => setDataPreviewModal({ visible: true, dataset: record }))}
                     loading={historyLoading}
                     pagination={{ pageSize: 5 }}
                     locale={{ emptyText: 'Пока нет синтетических датасетов' }}
@@ -779,57 +915,9 @@ export const GANManager: React.FC = () => {
         />
       </Card>
 
-      <Modal
-        title="Выберите чекпоинт для загрузки"
-        open={loadModalVisible}
-        onCancel={() => setLoadModalVisible(false)}
-        footer={null}
-        width={800}
-      >
-        <List
-          dataSource={checkpoints}
-          renderItem={(checkpoint: any) => (
-            <List.Item
-              actions={[
-                <Button type="link" onClick={() => handleLoadCheckpoint(checkpoint.name || checkpoint.filename)}>
-                  Загрузить
-                </Button>,
-              ]}
-            >
-              <List.Item.Meta
-                title={checkpoint.name || checkpoint.filename}
-                description={
-                  <div>
-                    <div>Размер: {checkpoint.metrics?.size ? `${(checkpoint.metrics.size / 1024 / 1024).toFixed(2)} MB` : 'N/A'}</div>
-                    <div>Изменен: {checkpoint.created_at ? new Date(checkpoint.created_at).toLocaleString() : 'N/A'}</div>
-                  </div>
-                }
-              />
-            </List.Item>
-          )}
-        />
-        {checkpoints.length === 0 && <div style={{ textAlign: 'center', padding: 20 }}>Нет доступных чекпоинтов</div>}
-      </Modal>
 
       <Modal
-        title="Фильтры генерации"
-        open={filtersModalVisible}
-        onCancel={() => setFiltersModalVisible(false)}
-        footer={[
-          <Button key="clear" onClick={handleClearFilters}>
-            Очистить
-          </Button>,
-          <Button key="cancel" onClick={() => setFiltersModalVisible(false)}>
-            Закрыть
-          </Button>,
-        ]}
-        width={800}
-      >
-        {filterOptions ? filterControls : 'Загрузка фильтров...'}
-      </Modal>
-
-      <Modal
-        title={dataPreviewModal.dataset?.dataset_name || 'Превью синтетических данных'}
+        title={dataPreviewModal.dataset?.dataset_name || dataPreviewModal.dataset?.extra_metadata?.dataset_name || 'Превью синтетических данных'}
         open={dataPreviewModal.visible}
         onCancel={() => setDataPreviewModal({ visible: false })}
         footer={[
@@ -845,17 +933,17 @@ export const GANManager: React.FC = () => {
         {dataPreviewModal.dataset ? (
           <>
             <div style={{ marginBottom: 16 }}>
-              <Tag color="blue">Всего записей: {dataPreviewModal.dataset.synthetic_samples || dataPreviewModal.dataset.extra_metadata?.records?.length || 0}</Tag>
+              <Tag color="blue">Всего записей: {dataPreviewModal.dataset.synthetic_samples || getDatasetRecords(dataPreviewModal.dataset).length || dataPreviewModal.dataset.sample_count || 0}</Tag>
               <Tag color="green">Предпросмотр: первые 10 записей</Tag>
             </div>
             <Table
-              dataSource={dataPreviewModal.dataset.synthetic_preview || dataPreviewModal.dataset.extra_metadata?.records?.slice(0, 10) || []}
-              columns={(dataPreviewModal.dataset.features || Object.keys(dataPreviewModal.dataset.synthetic_preview?.[0] || {})).map((feature: string) => ({ 
-                title: feature, 
+              dataSource={getDatasetRecords(dataPreviewModal.dataset).slice(0, 10)}
+              columns={Object.keys(getDatasetRecords(dataPreviewModal.dataset)[0] || {}).map((feature: string) => ({
+                title: feature,
                 dataIndex: feature,
                 ellipsis: true,
               }))}
-              rowKey={(record) => record.user_id ?? Math.random()}
+              rowKey={(record: any) => record.user_id ?? record.id ?? Math.random()}
               pagination={{ pageSize: 10 }}
               size="small"
               scroll={{ x: 'max-content' }}
@@ -866,31 +954,6 @@ export const GANManager: React.FC = () => {
         )}
       </Modal>
 
-      <Modal
-        title="Глоссарий GAN - Руководство по параметрам"
-        open={glossaryVisible}
-        onCancel={() => setGlossaryVisible(false)}
-        footer={[
-          <Button key="close" type="primary" onClick={() => setGlossaryVisible(false)}>
-            Закрыть
-          </Button>
-        ]}
-        width={800}
-      >
-        <div style={{ maxHeight: 500, overflowY: 'auto' }}>
-          <List
-            dataSource={GAN_GLOSSARY}
-            renderItem={(item) => (
-              <List.Item>
-                <List.Item.Meta
-                  title={<span style={{ fontWeight: 600, color: '#1890ff' }}>{item.term}</span>}
-                  description={item.description}
-                />
-              </List.Item>
-            )}
-          />
-        </div>
-      </Modal>
     </div>
   );
 };
