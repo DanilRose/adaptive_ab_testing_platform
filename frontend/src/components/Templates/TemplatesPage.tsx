@@ -6,7 +6,7 @@ export const TemplatesPage: React.FC = () => {
     <Card>
       <Typography.Title level={4}>Шаблоны</Typography.Title>
       <Typography.Paragraph style={{ marginBottom: 0 }}>
-        Раздел находится в разработке. Здесь будут доступны шаблоны конфигурации GAN и шаблоны фильтров генерации синтетических данных.
+        Разработка
       </Typography.Paragraph>
     </Card>
   );

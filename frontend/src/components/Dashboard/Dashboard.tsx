@@ -212,7 +212,7 @@ export const Dashboard: React.FC = () => {
     Modal.confirm({
       title: 'Полностью удалить тест?',
       content: 'Это действие необратимо! Тест будет удален из базы данных.',
-      okText: 'Да, удалить навсегда',
+      okText: 'Да, удалить',
       okType: 'danger',
       cancelText: 'Отмена',
       onOk: async () => {
@@ -326,7 +326,7 @@ export const Dashboard: React.FC = () => {
               icon={<DeleteOutlined />}
               onClick={() => handlePermanentlyDeleteTest(test.test_id)}
             >
-              Удалить навсегда
+              Удалить
             </Button>,
           ];
         default:

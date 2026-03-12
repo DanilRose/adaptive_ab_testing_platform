@@ -1,0 +1,107 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+  /* Claude Theme — warm cream & amber */
+  --background: 36 18% 97%;
+  --foreground: 20 14% 12%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 20 14% 12%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 20 14% 12%;
+
+  /* Claude orange-amber accent */
+  --primary: 32 95% 44%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 30 12% 93%;
+  --secondary-foreground: 20 10% 28%;
+
+  --muted: 30 12% 93%;
+  --muted-foreground: 24 8% 48%;
+
+  --accent: 32 95% 94%;
+  --accent-foreground: 32 95% 32%;
+
+  --destructive: 4 86% 58%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 30 12% 88%;
+  --input: 30 12% 88%;
+  --ring: 32 95% 44%;
+  --radius: 0.5rem;
+
+  --sidebar-bg: 0 0% 100%;
+  --sidebar-border: 30 12% 90%;
+  --sidebar-item-hover: 30 20% 96%;
+  --sidebar-item-active: 32 95% 93%;
+  --sidebar-item-active-text: 32 95% 32%;
+
+  --chart-1: 32 95% 44%;
+  --chart-2: 160 50% 38%;
+  --chart-3: 42 85% 52%;
+  --chart-4: 280 50% 52%;
+  --chart-5: 340 65% 52%;
+}
+
+.dark {
+  --background: 20 14% 9%;
+  --foreground: 30 12% 92%;
+
+  --card: 22 12% 13%;
+  --card-foreground: 30 12% 92%;
+
+  --popover: 22 12% 13%;
+  --popover-foreground: 30 12% 92%;
+
+  --primary: 32 90% 52%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 22 10% 18%;
+  --secondary-foreground: 30 12% 78%;
+
+  --muted: 22 10% 18%;
+  --muted-foreground: 24 8% 52%;
+
+  --accent: 22 28% 20%;
+  --accent-foreground: 32 90% 65%;
+
+  --destructive: 4 72% 50%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 22 12% 20%;
+  --input: 22 12% 20%;
+  --ring: 32 90% 52%;
+
+  --sidebar-bg: 22 12% 10%;
+  --sidebar-border: 22 12% 18%;
+  --sidebar-item-hover: 22 14% 17%;
+  --sidebar-item-active: 22 28% 22%;
+  --sidebar-item-active-text: 32 90% 65%;
+
+  --chart-1: 32 90% 52%;
+  --chart-2: 160 50% 45%;
+  --chart-3: 42 85% 55%;
+  --chart-4: 280 55% 60%;
+  --chart-5: 340 65% 55%;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }

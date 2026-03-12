@@ -201,7 +201,7 @@ export const ResultsPage: React.FC = () => {
   const getVariantColor = (variant: string) => variantColors[variant] || '#722ed1';
 
   const renderCumulativeChart = () => (
-    <Card title="📈 Накопленная метрика" size="small" style={{ marginBottom: 16 }}>
+    <Card title="Накопленная метрика" size="small" style={{ marginBottom: 16 }}>
       <ResponsiveContainer width="100%" height={380}>
         <AreaChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" />
@@ -489,7 +489,7 @@ export const ResultsPage: React.FC = () => {
     ];
 
     return (
-      <Card title="📋 Финальные результаты" size="small">
+      <Card title="Финальные результаты" size="small">
         <Table
           columns={columns}
           dataSource={tableData}
@@ -505,7 +505,7 @@ export const ResultsPage: React.FC = () => {
 
   return (
     <div style={{ padding: '20px' }}>
-      <Title level={2}>📊 Результаты A/B тестов</Title>
+      <Title level={2}> Результаты A/B тестов</Title>
 
       {isSimulating && (
         <Alert
@@ -596,7 +596,7 @@ export const ResultsPage: React.FC = () => {
 
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             <Col span={8}>
-              <Card size="small" title="🏆 Winner">
+              <Card size="small" title="Победитель">
                 {timeSeriesData.winner ? (
                   <Tag color="success">{timeSeriesData.winner} (+{timeSeriesData.winner_uplift_percent.toFixed(2)}%), confidence: {timeSeriesData.winner_confidence}</Tag>
                 ) : (
@@ -605,18 +605,15 @@ export const ResultsPage: React.FC = () => {
               </Card>
             </Col>
             <Col span={8}>
-              <Card size="small" title="🧪 Sequential Testing">
+              <Card size="small" title="Промежуточные проверки">
                 <Progress
                   percent={Math.round((timeSeriesData.current_sequential_look / Math.max(1, timeSeriesData.max_sequential_looks)) * 100)}
                   format={() => `${timeSeriesData.current_sequential_look}/${timeSeriesData.max_sequential_looks}`}
                 />
-                <Text type="secondary">
-                  Выполнено промежуточных проверок значимости (look) из запланированных.
-                </Text>
               </Card>
             </Col>
             <Col span={8}>
-              <Card size="small" title="🛡️ SRM Check">
+              <Card size="small" title="Равномерность распределения трафика">
                 {timeSeriesData.srm_check_passed === null ? (
                   <Tag color="default">Нет данных</Tag>
                 ) : timeSeriesData.srm_check_passed ? (
@@ -624,9 +621,6 @@ export const ResultsPage: React.FC = () => {
                 ) : (
                   <Tag color="error">Failed (p={timeSeriesData.srm_p_value?.toFixed(4) || 'N/A'})</Tag>
                 )}
-                <Text type="secondary">
-                  Проверка равномерности распределения трафика по вариантам.
-                </Text>
               </Card>
             </Col>
           </Row>

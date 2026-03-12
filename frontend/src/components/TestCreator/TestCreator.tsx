@@ -236,11 +236,10 @@ export const TestCreator: React.FC = () => {
       </Form>
 
       <div style={{ marginTop: '20px', padding: '12px', background: '#f0f2f5', borderRadius: '4px' }}>
-        <h4>📋 Рекомендации:</h4>
+        <h4>    Рекомендации:</h4>
         <ul style={{ margin: 0, paddingLeft: '20px' }}>
           <li>Первый вариант (A) всегда считается контрольным</li>
           <li>Для финальной валидации гипотез используйте fixed split</li>
-          <li>Параметры симуляции задаются здесь при создании теста, запуск в Dashboard выполняется в один клик</li>
           <li>Если датасет не выбран, при запуске будет использован последний доступный synthetic датасет</li>
         </ul>
       </div>

@@ -1,16 +1,4 @@
 # backend/ab_testing/statistics.py
-"""
-Google-Standard Statistical Tools для A/B Testing
-
-Включает:
-- Sample Size calculation с правильным MDE
-- Sequential Testing (O'Brien-Fleming boundaries)
-- Sample Ratio Mismatch (SRM) проверка
-- Statistical Power Analysis
-- Multiple Comparisons Correction (Bonferroni, FDR)
-- CUPED для Variance Reduction
-"""
-
 import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
@@ -20,7 +8,6 @@ from scipy.optimize import brentq
 
 @dataclass
 class StatisticalTestResult:
-    """Результат статистического теста"""
     t_statistic: float
     p_value: float
     p_value_corrected: float
@@ -33,7 +20,6 @@ class StatisticalTestResult:
 
 @dataclass
 class SRMCheckResult:
-    """Результат проверки Sample Ratio Mismatch"""
     srm_detected: bool
     p_value: float
     chi2_statistic: float
@@ -44,7 +30,6 @@ class SRMCheckResult:
 
 @dataclass
 class PowerAnalysisResult:
-    """Результат анализа статистической мощности"""
     power: float
     sample_size_per_variant: int
     mde_absolute: float
@@ -54,14 +39,6 @@ class PowerAnalysisResult:
 
 
 class SampleSizeCalculator:
-    """
-    Рассчет размера выборки для A/B тестов
-    
-    Google использует консервативные оценки:
-    - Power = 0.8 (минимум)
-    - Alpha = 0.05 (two-tailed)
-    - MDE = минимальный практически значимый эффект
-    """
     
     @staticmethod
     def calculate_sample_size(
@@ -72,21 +49,7 @@ class SampleSizeCalculator:
         power: float = 0.8,
         two_tailed: bool = True
     ) -> int:
-        """
-        Рассчитывает необходимый размер выборки НА ВАРИАНТ
-        
-        Args:
-            baseline_mean: Среднее значение в контроле
-            baseline_std: Стандартное отклонение в контроле
-            mde_percent: Минимальный детектируемый эффект в %
-            alpha: Уровень значимости (Type I error)
-            power: Статистическая мощность (1 - Type II error)
-            two_tailed: Двусторонний тест
-            
-        Returns:
-            Размер выборки на один вариант
-        """
-        # Эффект в абсолютных единицах
+
         mde_absolute = baseline_mean * (mde_percent / 100.0)
         
         # Effect size (Cohen's d)
@@ -111,16 +74,6 @@ class SampleSizeCalculator:
         alpha: float = 0.05,
         power: float = 0.8
     ) -> int:
-        """
-        Для бинарных метрик (конверсия, CTR)
-        
-        Args:
-            baseline_conversion: Текущая конверсия (0.15 = 15%)
-            mde_percent: Относительное изменение (10 = +10%)
-            
-        Returns:
-            Размер выборки на вариант
-        """
         p1 = baseline_conversion
         p2 = baseline_conversion * (1 + mde_percent / 100.0)
         
@@ -141,23 +94,8 @@ class SampleSizeCalculator:
 
 
 class SequentialTesting:
-    """
-    Sequential Testing с O'Brien-Fleming boundaries
-    
-    Позволяет:
-    - Останавливать тест досрочно при достижении значимости
-    - Контролировать Type I error rate
-    - Экономить время и ресурсы
-    
-    Google/Meta используют именно этот подход
-    """
     
     def __init__(self, alpha: float = 0.05, max_looks: int = 5):
-        """
-        Args:
-            alpha: Общий уровень значимости
-            max_looks: Количество промежуточных проверок
-        """
         self.alpha = alpha
         self.max_looks = max_looks
         self.boundaries = self._calculate_obrien_fleming_boundaries()
@@ -165,14 +103,6 @@ class SequentialTesting:
         self.looks_history: List[Dict[str, Any]] = []
     
     def _calculate_obrien_fleming_boundaries(self) -> List[float]:
-        """
-        O'Brien-Fleming spending function
-        
-        Особенности:
-        - Очень консервативные границы в начале
-        - Более либеральные в конце
-        - Сохраняет общий alpha
-        """
         boundaries = []
         
         for k in range(1, self.max_looks + 1):
@@ -190,12 +120,6 @@ class SequentialTesting:
         return boundaries
     
     def should_stop_for_success(self, p_value: float, effect: float) -> Tuple[bool, str]:
-        """
-        Проверяет, достигнута ли граница для остановки
-        
-        Returns:
-            (should_stop, reason)
-        """
         if self.current_look >= self.max_looks:
             # Финальная проверка
             stop = p_value < self.alpha
@@ -227,16 +151,6 @@ class SequentialTesting:
         observations: int,
         target_sample_size: int
     ) -> Tuple[bool, str]:
-        """
-        Проверка на бесперспективность (futility)
-
-        Останавливаем, если:
-        1. Наблюдаемый эффект << target MDE
-        2. Собрано достаточно данных (>70% от target)
-        3. Тренд не улучшается
-
-        Исправлено: более консервативная проверка, чтобы не останавливать слишком рано
-        """
         progress = observations / target_sample_size
 
         # Должны собрать хотя бы 70% данных (было 50%)
@@ -259,16 +173,7 @@ class SequentialTesting:
 
 
 class SRMChecker:
-    """
-    Sample Ratio Mismatch (SRM) Detection
-    
-    SRM = индикатор проблем в системе рандомизации:
-    - Баги в коде распределения
-    - Фильтрация данных после рандомизации
-    - Проблемы с логированием
-    
-    Google проверяет SRM в каждом эксперименте
-    """
+
     
     @staticmethod
     def check_srm(
@@ -276,17 +181,6 @@ class SRMChecker:
         observed_counts: List[int],
         alpha: float = 0.001  # Очень консервативный порог
     ) -> SRMCheckResult:
-        """
-        Chi-square goodness-of-fit test для проверки SRM
-        
-        Args:
-            expected_ratios: Ожидаемые пропорции [0.5, 0.5] или [0.33, 0.33, 0.34]
-            observed_counts: Фактические количества юзеров
-            alpha: Порог для детекции SRM (0.001 = очень строго)
-            
-        Returns:
-            SRMCheckResult с результатами проверки
-        """
         total = sum(observed_counts)
         expected_counts = [ratio * total for ratio in expected_ratios]
         
@@ -315,13 +209,6 @@ class SRMChecker:
     
     @staticmethod
     def check_srm_by_variant(variant_counts: Dict[str, int], expected_split: Optional[Dict[str, float]] = None) -> SRMCheckResult:
-        """
-        Удобная обертка для проверки по вариантам
-        
-        Args:
-            variant_counts: {"control": 1000, "treatment": 1050}
-            expected_split: {"control": 0.5, "treatment": 0.5} или None для равного
-        """
         variants = sorted(variant_counts.keys())
         observed = [variant_counts[v] for v in variants]
         
@@ -336,16 +223,6 @@ class SRMChecker:
 
 
 class StatisticalAnalyzer:
-    """
-    Production-grade статистический анализ A/B тестов
-    
-    Включает:
-    - Welch's t-test (не предполагает равные дисперсии)
-    - Multiple comparisons correction
-    - Effect size (Cohen's d)
-    - Confidence intervals
-    - Power analysis
-    """
     
     def __init__(self, alpha: float = 0.05):
         self.alpha = alpha
@@ -357,15 +234,6 @@ class StatisticalAnalyzer:
         num_comparisons: int = 1,
         correction_method: str = "bonferroni"
     ) -> StatisticalTestResult:
-        """
-        Анализ непрерывной метрики (revenue, session_duration, etc.)
-        
-        Args:
-            control: Данные контрольной группы
-            treatment: Данные тестовой группы
-            num_comparisons: Количество сравнений (для коррекции)
-            correction_method: "bonferroni" или "fdr"
-        """
         # Welch's t-test (более robust чем обычный t-test)
         t_stat, p_value = stats.ttest_ind(treatment, control, equal_var=False)
         
@@ -419,11 +287,6 @@ class StatisticalAnalyzer:
         treatment_total: int,
         num_comparisons: int = 1
     ) -> StatisticalTestResult:
-        """
-        Анализ бинарной метрики (конверсия, CTR)
-        
-        Использует two-proportion z-test
-        """
         # Conversion rates
         p_control = control_conversions / control_total
         p_treatment = treatment_conversions / treatment_total
@@ -478,11 +341,6 @@ class StatisticalAnalyzer:
         baseline_std: float,
         alpha: float = 0.05
     ) -> float:
-        """
-        Рассчитывает фактическую статистическую мощность
-        
-        Power = вероятность обнаружить эффект, если он есть
-        """
         if baseline_std == 0:
             return 0.0
         
@@ -501,32 +359,12 @@ class StatisticalAnalyzer:
 
 
 class CUPEDAnalyzer:
-    """
-    CUPED (Controlled-experiment Using Pre-Experiment Data)
-    
-    Variance Reduction техника от Microsoft/Google:
-    - Использует pre-period данные для снижения дисперсии
-    - Позволяет детектировать меньшие эффекты
-    - Ускоряет тесты на 30-50%
-    
-    Требование: наличие pre-experiment данных
-    """
     
     @staticmethod
     def apply_cuped(
         post_metric: np.ndarray,
         pre_metric: np.ndarray
     ) -> Tuple[np.ndarray, Dict[str, float]]:
-        """
-        Применяет CUPED корректировку
-        
-        Args:
-            post_metric: Метрика после начала эксперимента
-            pre_metric: Метрика до эксперимента (covariате)
-            
-        Returns:
-            (cuped_metric, stats_dict)
-        """
         # Оптимальный коэффициент theta
         covariance = np.cov(post_metric, pre_metric)[0, 1]
         variance_pre = np.var(pre_metric, ddof=1)
@@ -571,20 +409,6 @@ def run_full_ab_analysis(
     metric_type: str = "continuous",
     alpha: float = 0.05
 ) -> Dict[str, Any]:
-    """
-    Полный анализ A/B теста по стандартам Google
-    
-    Args:
-        control_data: Данные контрольной группы
-        treatment_data: Данные тестовой группы
-        baseline_std: Стандартное отклонение baseline
-        mde_target: Целевой MDE в процентах
-        metric_type: "continuous" или "binary"
-        alpha: Уровень значимости
-        
-    Returns:
-        Полный отчет с рекомендациями
-    """
     analyzer = StatisticalAnalyzer(alpha=alpha)
     
     # 1. Основной статистический тест

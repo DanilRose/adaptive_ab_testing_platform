@@ -21,7 +21,13 @@
     "noFallthroughCasesInSwitch": true,
 
     /* Vite env types */
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+
+    /* Path alias */
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]

@@ -1,8 +1,8 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
-import { Flex, Spin } from 'antd';
-import type { UserRole } from '../../types';
-import { useAuth } from '../../context/AuthContext';
+import { Loader2 } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
+import type { UserRole } from '@/types';
 
 interface ProtectedRouteProps {
   children: JSX.Element;
@@ -14,9 +14,12 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowe
 
   if (loading) {
     return (
-      <Flex align="center" justify="center" style={{ minHeight: '100vh' }}>
-        <Spin size="large" />
-      </Flex>
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="h-12 w-12 animate-spin text-primary" />
+          <p className="text-muted-foreground">Загрузка...</p>
+        </div>
+      </div>
     );
   }
 
