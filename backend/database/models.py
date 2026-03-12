@@ -132,10 +132,7 @@ class ABTestORM(Base):
         lazy="dynamic"
     )
 
-    __table_args__ = (
-        Index("ix_ab_tests_status_created_at", "status", "created_at"),
-        Index("ix_ab_tests_dataset_id", "dataset_id"),
-    )
+    __table_args__ = ()
 
 
 class GeneratedDataORM(Base):
@@ -166,9 +163,7 @@ class GeneratedDataORM(Base):
         foreign_keys="ABTestORM.dataset_id"
     )
 
-    __table_args__ = (
-        Index("ix_generated_data_data_type_created_at", "data_type", "created_at"),
-    )
+    __table_args__ = ()
 
 
 class TestSessionORM(Base):
@@ -185,10 +180,7 @@ class TestSessionORM(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
-    __table_args__ = (
-        Index("ix_test_sessions_test_id", "test_id"),
-        Index("ix_test_sessions_user_id", "user_id"),
-    )
+    __table_args__ = ()
 
 
 class ABTestTimeSeriesORM(Base):
@@ -215,9 +207,7 @@ class ABTestTimeSeriesORM(Base):
     
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
-    __table_args__ = (
-        Index("ix_ab_test_time_series_test_variant_users", "test_id", "variant", "users_processed"),
-    )
+    __table_args__ = ()
 
 
 class CheckpointORM(Base):
@@ -238,5 +228,4 @@ class CheckpointORM(Base):
 
     __table_args__ = (
         UniqueConstraint("file_path", name="uq_checkpoints_file_path"),
-        Index("ix_checkpoints_name_created_at", "name", "created_at"),
     )

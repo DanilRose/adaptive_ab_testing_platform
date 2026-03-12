@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.database.models import UserORM
@@ -13,9 +14,24 @@ from backend.auth.service import get_password_hash
 
 logger = logging.getLogger(__name__)
 
+# Индексы, которые нужно создать с IF NOT EXISTS (SQLAlchemy не поддерживает это нативно)
+_EXTRA_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS ix_ab_tests_status_created_at ON ab_tests (status, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_ab_tests_dataset_id ON ab_tests (dataset_id)",
+    "CREATE INDEX IF NOT EXISTS ix_generated_data_data_type_created_at ON generated_data (data_type, created_at)",
+    "CREATE INDEX IF NOT EXISTS ix_test_sessions_test_id ON test_sessions (test_id)",
+    "CREATE INDEX IF NOT EXISTS ix_test_sessions_user_id ON test_sessions (user_id)",
+    "CREATE INDEX IF NOT EXISTS ix_ab_test_time_series_test_variant_users ON ab_test_time_series (test_id, variant, users_processed)",
+    "CREATE INDEX IF NOT EXISTS ix_checkpoints_name_created_at ON checkpoints (name, created_at)",
+]
+
 
 def create_tables() -> None:
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine, checkfirst=True)
+    with engine.connect() as conn:
+        for stmt in _EXTRA_INDEXES:
+            conn.execute(text(stmt))
+        conn.commit()
 
 
 def seed_default_users() -> None:
