@@ -32,6 +32,7 @@ services:
       - DB_USER=ab_user
       - DB_PASSWORD=ab_password
       - DATABASE_URL=postgresql+psycopg2://ab_user:ab_password@postgres:5432/ab_testing
+      - ASYNC_DATABASE_URL=postgresql+asyncpg://ab_user:ab_password@postgres:5432/ab_testing
     volumes:
       - ./backend:/app/backend
       - ./backend/logs:/app/logs

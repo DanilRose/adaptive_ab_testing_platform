@@ -47,6 +47,29 @@ async def lifespan(app: FastAPI):
     try:
         bootstrap_database()
         logger.info("✅ Database initialized")
+        
+        # Исправление бага 1: Сброс "висячих" статусов симуляции при перезапуске
+        try:
+            from backend.database.session import SessionLocal
+            from backend.database import crud
+            
+            with SessionLocal() as db:
+                # Находим все тесты с simulation_status='running' и сбрасываем их
+                from backend.database.models import ABTestORM
+                running_simulations = db.query(ABTestORM).filter(
+                    ABTestORM.simulation_status == 'running'
+                ).all()
+                
+                for test in running_simulations:
+                    test.simulation_status = None
+                    logger.warning(f"⚠️ Reset stuck simulation status for test {test.test_id}")
+                
+                if running_simulations:
+                    db.commit()
+                    logger.info(f"✅ Reset {len(running_simulations)} stuck simulation(s)")
+        except Exception as e:
+            logger.error(f"⚠️ Failed to reset stuck simulations: {e}")
+            
     except Exception as db_exc:
         logger.error(f"❌ Database bootstrap failed: {db_exc}", exc_info=True)
     yield

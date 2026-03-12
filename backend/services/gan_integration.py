@@ -16,20 +16,19 @@ class GANService:
         self.gan_model = None
         self.is_trained = False
         self.training_progress = 0
-        self.current_status = "checkpoint_not_loaded"  # Статус: Чекпоинт не загружен
+        self.current_status = "checkpoint_not_loaded"  
         self.current_epoch = 0
         self.total_epochs = 0
         self.current_config_snapshot: Dict[str, Any] = {}
         self.current_config_overrides: Dict[str, Any] = {}
         self._stop_training = False
-        self.loaded_checkpoint_name: Optional[str] = None  # Имя загруженного чекпоинта
+        self.loaded_checkpoint_name: Optional[str] = None  
     
     def _serialize_config(self, config: Any) -> Dict[str, Any]:
         snapshot: Dict[str, Any] = {}
         if config is None:
             return snapshot
         
-        # Если config - это словарь, используем его напрямую
         if isinstance(config, dict):
             for key, value in config.items():
                 if key.startswith("_"):
@@ -44,7 +43,6 @@ class GANService:
                     snapshot[key] = str(value)
             return snapshot
         
-        # Если config - это объект с __dict__
         for key, value in config.__dict__.items():
             if key.startswith("_"):
                 continue
@@ -70,7 +68,7 @@ class GANService:
                        setattr(config, key, value)
 
             self.gan_model = GAN(config)
-            self.current_status = "checkpoint_not_loaded"  # Инициализация не меняет статус загрузки
+            self.current_status = "checkpoint_not_loaded"  
             self.is_trained = False
             self.current_config_overrides = config_overrides or {}
             self.current_config_snapshot = self._serialize_config(config)

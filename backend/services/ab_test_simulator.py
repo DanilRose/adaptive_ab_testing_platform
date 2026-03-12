@@ -1,104 +1,955 @@
+import time
+import asyncio
+from datetime import datetime, timedelta
+from typing import Dict, Optional, Any, List
+from dataclasses import dataclass, asdict
+
 import pandas as pd
 import numpy as np
-from backend.ab_testing.managers import AdaptiveABTestingPlatform
-from backend.database.session import SessionLocal
+
+from backend.ab_testing.traffic_splitter import (
+    FixedTrafficSplitter,
+    AdaptiveTrafficSplitter,
+    ABVariant,
+    create_equal_split_variants,
+)
+from backend.ab_testing.statistics import (
+    SequentialTesting,
+    SRMChecker,
+    StatisticalAnalyzer,
+    SampleSizeCalculator,
+    run_full_ab_analysis,
+)
+from backend.database.session import SessionLocal, AsyncSessionLocal
 from backend.database import crud
+from backend.database.models import ABTestORM, ABTestTimeSeriesORM
 
-class ABTestSimulator:
-    def __init__(self, platform: AdaptiveABTestingPlatform):
-        self.platform = platform
+
+@dataclass
+class SimulationConfig:
+    """Конфигурация симуляции"""
+    test_id: str
+    dataset_id: int  # ОБЯЗАТЕЛЬНО!
+    user_count: int
+    real_world_duration_days: int = 14  # Эквивалент реального времени
+    simulation_duration_minutes: Optional[int] = None  # Если None, рассчитывается динамически
+    traffic_split_strategy: str = "fixed"  # "fixed" | "adaptive"
+    enable_sequential_testing: bool = True
+    enable_srm_check: bool = True
+    max_sequential_looks: int = 5
+    variant_effects: Optional[Dict[str, Dict[str, float]]] = None
+
+
+@dataclass
+class SimulationProgress:
+    """Прогресс симуляции в реальном времени"""
+    users_processed: int
+    total_users: int
+    progress_percent: float
+    variant_counts: Dict[str, int]
+    current_look: int
+    srm_status: str
+    estimated_completion_time: datetime
+    can_stop_early: bool
+    early_stop_reason: Optional[str]
+
+
+class GoogleStandardABTestSimulator:
+    """
+    A/B Test Simulator по стандартам Google/Meta
     
-    def _load_latest_synthetic_data(self) -> pd.DataFrame:
-        with SessionLocal() as db:
-            latest = crud.get_latest_generated_data_by_type(db, "synthetic")
-
-        if latest is None:
-            raise ValueError("Не найдены синтетические данные в БД. Сначала выполните генерацию в GAN Manager.")
-
-        metadata = latest.extra_metadata or {}
-        records = metadata.get("records")
-        if not records:
-            records = latest.preview_json or []
-
-        if not records:
-            raise ValueError("В БД нет записей synthetic data для симуляции.")
-
-        return pd.DataFrame(records)
+    Workflow:
+    1. Валидация: проверка наличия GAN-датасета
+    2. Setup: настройка traffic splitter (fixed/adaptive)
+    3. Simulation: запуск с правильной временной шкалой
+    4. Sequential Testing: проверка early stopping каждые 20%
+    5. SRM Check: проверка рандомизации
+    6. Analysis: полная статистика с коррекциями
+    """
     
-    def simulate_test(self, test_id: str, synthetic_data_path: str = None, user_count: int = 1000):
-        synthetic_data = self._load_latest_synthetic_data()
-        
-        print(f" Starting A/B test simulation for {test_id}")
-        
-        variant_counts = {}
-        
-        for i, user in synthetic_data.head(user_count).iterrows():
-            assignment = self.platform.assign_user_to_test(
-                test_id=test_id,
-                user_id=str(user['user_id']),
-                user_context=user.to_dict()
+    def __init__(self, config: SimulationConfig):
+        self.config = config
+        self.progress: Optional[SimulationProgress] = None
+
+        # Валидация dataset
+        self._validate_dataset()
+
+        # Setup traffic splitter
+        self.traffic_splitter = self._setup_traffic_splitter()
+
+        # Setup sequential testing
+        if config.enable_sequential_testing:
+            self.sequential_tester = SequentialTesting(
+                alpha=0.05,
+                max_looks=config.max_sequential_looks
             )
-            
-            variant = assignment['variant']
-            variant_counts[variant] = variant_counts.get(variant, 0) + 1
-            
-            if i % 100 == 0:
-                print(f"📊 Distribution after {i} users: {variant_counts}")
-            
-            conversion_rate = self._calculate_conversion_probability(user)
-            converted = np.random.random() < conversion_rate
-            
-            if converted:
-                revenue = self._calculate_revenue(user)
-                primary_metric = self._get_primary_metric(test_id)
-                metric_value = revenue if primary_metric == 'revenue' else 1.0
-                
-                self.platform.record_user_metric(
-                    assignment['session_id'],
-                    primary_metric,
-                    metric_value
-                )
-            
-            self.platform.complete_user_session(assignment['session_id'])
+        else:
+            self.sequential_tester = None
+
+        # Setup SRM checker
+        if config.enable_srm_check:
+            self.srm_checker = SRMChecker()
+        else:
+            self.srm_checker = None
+
+        # Statistical analyzer
+        self.analyzer = StatisticalAnalyzer(alpha=0.05)
+
+        # Results storage
+        self.results_by_variant: Dict[str, List[float]] = {}
+        self.session_data: List[Dict[str, Any]] = []
+
+        # Time series storage (для графиков)
+        self.time_series_data: List[Dict[str, Any]] = []
+        self.time_series_interval: int = 20  # Сохранять каждые 20 пользователей для плавности
         
-
-    def _get_primary_metric(self, test_id: str) -> str:
-
-        try:
-            test_config = self.platform.test_manager.test_configs.get(test_id)
-            if test_config:
-                return test_config.primary_metric
-        except:
-            pass
-        return 'conversion' 
+        # Переменные для early stopping (сохраняются в БД в конце)
+        self._early_stop_triggered = False
+        self._early_stop_reason: Optional[str] = None
+        self._sequential_look_at_stop: int = 0
     
-    def _calculate_conversion_probability(self, user: pd.Series) -> float:
+    def _validate_dataset(self):
+        """Валидация наличия синтетического датасета"""
+        try:
+            with SessionLocal() as db:
+                dataset = crud.get_generated_data_by_id(db, self.config.dataset_id)
+
+                if dataset is None:
+                    raise ValueError(
+                        f"❌ Dataset {self.config.dataset_id} not found! "
+                        "You must generate synthetic data first using GAN Manager."
+                    )
+
+                if dataset.data_type != "synthetic":
+                    raise ValueError(
+                        f"❌ Dataset {self.config.dataset_id} is not synthetic! "
+                        f"Found type: {dataset.data_type}. Only synthetic data allowed for A/B testing."
+                    )
+
+                # Проверка достаточности данных
+                if dataset.sample_count < self.config.user_count:
+                    raise ValueError(
+                        f"❌ Insufficient synthetic data: "
+                        f"need {self.config.user_count}, have {dataset.sample_count}. "
+                        "Generate more data in GAN Manager."
+                    )
+
+                print(f"✅ Dataset validation passed: {dataset.sample_count} synthetic records available")
+        except Exception as e:
+            # Пробрасываем ValueError как есть, остальные оборачиваем
+            if isinstance(e, ValueError):
+                raise
+            raise ValueError(f"Dataset validation failed: {str(e)}")
+    
+    def _setup_traffic_splitter(self):
+        """Настройка traffic splitter с предупреждениями"""
+        with SessionLocal() as db:
+            test = db.query(ABTestORM).filter(ABTestORM.test_id == self.config.test_id).first()
+            if not test:
+                raise ValueError(f"Test {self.config.test_id} not found")
+            
+            variants = [ABVariant(name=v, weight=1.0) for v in test.variants]
+        
+        if self.config.traffic_split_strategy == "fixed":
+            print("✅ Using Fixed Traffic Split (Google/Meta standard)")
+            return FixedTrafficSplitter(variants, seed=42)
+        
+        elif self.config.traffic_split_strategy == "adaptive":
+            print(
+                "⚠️  WARNING: Using Adaptive Traffic Split (Thompson Sampling)\n"
+                "   This method introduces selection bias and invalidates p-values.\n"
+                "   Use only for:\n"
+                "   - Exploration phase (finding best of 5+ variants)\n"
+                "   - MAB tasks (recommendations, personalization)\n"
+                "   - NOT for final validation!\n"
+                "   Consider using 'fixed' strategy for production A/B tests.\n"
+            )
+            return AdaptiveTrafficSplitter(variants)
+        
+        else:
+            raise ValueError(f"Unknown strategy: {self.config.traffic_split_strategy}")
+    
+    def _load_synthetic_data(self) -> pd.DataFrame:
+        """Загрузка синтетических данных из БД"""
+        with SessionLocal() as db:
+            dataset = crud.get_generated_data_by_id(db, self.config.dataset_id)
+            
+            metadata = dataset.extra_metadata or {}
+            records = metadata.get("records") or dataset.preview_json or []
+            
+            if not records:
+                raise ValueError("No records found in synthetic dataset")
+            
+            return pd.DataFrame(records).head(self.config.user_count)
+    
+    def _get_test_config(self) -> Dict[str, Any]:
+        """Получение конфигурации теста"""
+        with SessionLocal() as db:
+            test = db.query(ABTestORM).filter(ABTestORM.test_id == self.config.test_id).first()
+            if not test:
+                raise ValueError(f"Test {self.config.test_id} not found")
+            
+            return {
+                'test_id': test.test_id,
+                'primary_metric': test.primary_metric,
+                'metric_type': test.metric_type,
+                'variants': test.variants,
+                'mde_percent': test.mde_percent,
+                'sample_size': test.sample_size,
+                'confidence_level': test.confidence_level,
+                'power': test.power,
+            }
+    
+    def _estimate_simulation_duration_minutes(
+        self,
+        user_count: int,
+        sample_size: Optional[int],
+        confidence_level: float,
+    ) -> int:
+        """
+        Динамически оценивает длительность симуляции.
+        Таргет:
+        - ~500 пользователей -> ~5 минут
+        - ~50 000 пользователей -> ~60 минут
+        """
+        user_count = max(1, int(user_count))
+        min_users, max_users = 500.0, 50000.0
+        min_minutes, max_minutes = 5.0, 60.0
+
+        # Логарифмическая интерполяция по объёму трафика
+        log_user = np.log10(float(user_count))
+        log_min = np.log10(min_users)
+        log_max = np.log10(max_users)
+        traffic_factor = (log_user - log_min) / max(1e-9, (log_max - log_min))
+        traffic_factor = float(np.clip(traffic_factor, 0.0, 1.0))
+
+        base_minutes = min_minutes + (max_minutes - min_minutes) * traffic_factor
+
+        # Модификатор от статистических параметров теста
+        confidence_factor = 1.0 + max(0.0, float(confidence_level) - 0.95) * 2.0
+        sample_factor = 1.0
+        if sample_size and sample_size > 0:
+            sample_factor = float(np.clip(user_count / float(sample_size), 0.7, 1.3))
+
+        estimated = base_minutes * confidence_factor * sample_factor
+        return int(np.clip(round(estimated), 5, 120))
+
+    def _calculate_delay_per_user(self) -> float:
+        """Рассчитывает задержку между пользователями для сжатой временной шкалы."""
+        simulation_minutes = self.config.simulation_duration_minutes or 20
+        total_simulation_seconds = simulation_minutes * 60
+        return total_simulation_seconds / max(1, self.config.user_count)
+
+    def _build_metric_profile(self, data: pd.DataFrame, primary_metric: str) -> Dict[str, Any]:
+        """Строит профиль метрики на основе реального датасета (без хардкода полей)."""
+        profile: Dict[str, Any] = {
+            "primary_exists": primary_metric in data.columns,
+            "is_binary": False,
+            "mean": 0.1,
+            "std": 0.05,
+            "min": 0.0,
+            "max": 1.0,
+            "numeric_columns": [],
+        }
+
+        numeric_df = data.select_dtypes(include=[np.number]).replace([np.inf, -np.inf], np.nan)
+        numeric_cols = list(numeric_df.columns)
+        profile["numeric_columns"] = numeric_cols
+
+        if primary_metric in data.columns:
+            raw = pd.to_numeric(data[primary_metric], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+            if len(raw) > 0:
+                p_mean = float(raw.mean())
+                p_std = float(raw.std(ddof=1)) if len(raw) > 1 else 0.0
+                p_min = float(raw.min())
+                p_max = float(raw.max())
+
+                unique_values = set(raw.round(8).unique().tolist())
+                is_binary = unique_values.issubset({0.0, 1.0}) or (0.0 <= p_min <= 1.0 and 0.0 <= p_max <= 1.0 and p_std < 0.5)
+
+                profile.update({
+                    "is_binary": bool(is_binary),
+                    "mean": p_mean,
+                    "std": max(1e-6, p_std),
+                    "min": p_min,
+                    "max": p_max,
+                })
+                return profile
+
+        if len(numeric_cols) > 0:
+            values = numeric_df.values.flatten()
+            values = values[~np.isnan(values)]
+            if len(values) > 0:
+                global_mean = float(np.mean(values))
+                global_std = float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
+                profile.update({
+                    "mean": global_mean,
+                    "std": max(1e-6, global_std),
+                    "min": float(np.min(values)),
+                    "max": float(np.max(values)),
+                    "is_binary": False,
+                })
+
+        return profile
+
+    def _generate_metric_value(
+        self,
+        user: pd.Series,
+        variant: str,
+        primary_metric: str,
+        metric_profile: Dict[str, Any],
+        metric_type: str,
+    ) -> float:
+        """Адаптивно получает метрику из датасета или генерирует по статистике датасета."""
+        variant_multiplier = self._get_variant_multiplier(variant, primary_metric)
+
+        primary_exists = metric_profile.get("primary_exists", False)
+        mean_val = float(metric_profile.get("mean", 0.1))
+        std_val = float(metric_profile.get("std", 0.05))
+        min_val = float(metric_profile.get("min", 0.0))
+        max_val = float(metric_profile.get("max", 1.0))
+
+        is_binary_metric = metric_type == "binary" or metric_profile.get("is_binary", False) or primary_metric in ["conversion", "click", "click_rate"]
+
+        if primary_exists:
+            raw_value = pd.to_numeric(pd.Series([user.get(primary_metric)]), errors="coerce").iloc[0]
+            if pd.notna(raw_value):
+                if is_binary_metric:
+                    base_prob = float(raw_value)
+                    if base_prob > 1.0:
+                        base_prob /= 100.0
+                    base_prob = float(np.clip(base_prob, 0.0, 1.0))
+                    prob = float(np.clip(base_prob * variant_multiplier, 0.0, 0.999))
+                    return 1.0 if np.random.random() < prob else 0.0
+
+                value = float(raw_value) * variant_multiplier
+                return float(np.clip(value, min_val, max_val if max_val > min_val else value))
+
+        if is_binary_metric:
+            baseline_prob = mean_val
+            if baseline_prob > 1.0:
+                baseline_prob /= 100.0
+            baseline_prob = float(np.clip(baseline_prob, 0.01, 0.8))
+            prob = float(np.clip(baseline_prob * variant_multiplier, 0.0, 0.999))
+            return 1.0 if np.random.random() < prob else 0.0
+
+        generated = float(np.random.normal(loc=mean_val, scale=max(1e-6, std_val)))
+        generated *= variant_multiplier
+        low = min_val if np.isfinite(min_val) else generated
+        high = max_val if np.isfinite(max_val) and max_val > low else generated
+        return float(np.clip(generated, low, high))
+    
+    def _calculate_conversion_probability(
+        self, 
+        user: pd.Series, 
+        variant: str,
+        primary_metric: str
+    ) -> float:
+        """Рассчет вероятности конверсии с учетом эффекта варианта"""
         base_prob = 0.1
         
-        if user['user_type'] == 'shopper':
+        # Факторы пользователя
+        if user.get('user_type') == 'shopper':
             base_prob += 0.2
-        if user['previous_purchases'] > 0:
+        if user.get('previous_purchases', 0) > 0:
             base_prob += 0.15
-        if user['loyalty_score'] > 0.7:
+        if user.get('loyalty_score', 0) > 0.7:
             base_prob += 0.1
-        if user['traffic_source'] == 'direct':
+        if user.get('traffic_source') == 'direct':
             base_prob += 0.05
-            
-        age_factor = max(0, (45 - abs(user['age'] - 35)) / 100)  
-        income_factor = min(0.2, user['income'] / 500000)
         
-        return min(0.8, base_prob + age_factor + income_factor)
+        # Демография
+        age = user.get('age', 35)
+        income = user.get('income', 0)
+        age_factor = max(0, (45 - abs(age - 35)) / 100)
+        income_factor = min(0.2, income / 500000)
+        
+        base_probability = min(0.8, base_prob + age_factor + income_factor)
+        
+        # Эффект варианта
+        variant_effect = self._get_variant_multiplier(variant, 'conversion')
+        
+        return min(0.95, base_probability * variant_effect)
     
-    def _calculate_revenue(self, user: pd.Series) -> float:
-        base_revenue = user['income'] * 0.02  
+    def _calculate_revenue(self, user: pd.Series, variant: str) -> float:
+        """Рассчет revenue с учетом эффекта варианта"""
+        income = user.get('income', 0)
+        base_revenue = income * 0.02
         
-        if user['user_type'] == 'shopper':
+        if user.get('user_type') == 'shopper':
             base_revenue *= 1.5
-        if user['previous_purchases'] > 3:
+        if user.get('previous_purchases', 0) > 3:
             base_revenue *= 1.3
-        if user['loyalty_score'] > 0.8:
+        if user.get('loyalty_score', 0) > 0.8:
             base_revenue *= 1.2
-
-        noise = np.random.normal(1.0, 0.2)
         
-        return max(10, base_revenue * noise)
+        # Добавляем шум
+        noise = np.random.normal(1.0, 0.2)
+        base_revenue = max(10, base_revenue * noise)
+        
+        # Эффект варианта
+        variant_effect = self._get_variant_multiplier(variant, 'revenue')
+        
+        return base_revenue * variant_effect
+    
+    def _get_variant_multiplier(self, variant: str, metric: str) -> float:
+        """Получает multiplier эффекта для варианта"""
+        if not self.config.variant_effects:
+            return 1.0
+        
+        variant_config = self.config.variant_effects.get(variant, {})
+        return float(variant_config.get(metric, 1.0))
+    
+    def _should_check_progress(self, users_processed: int) -> bool:
+        """Проверяем прогресс каждые 20% пользователей"""
+        if not self.config.enable_sequential_testing:
+            return False
+
+        check_points = [
+            int(self.config.user_count * 0.2),
+            int(self.config.user_count * 0.4),
+            int(self.config.user_count * 0.6),
+            int(self.config.user_count * 0.8),
+            self.config.user_count
+        ]
+
+        return users_processed in check_points
+
+    def _save_time_series_snapshot(self, users_processed: int):
+        """Сохраняет срез данных для временных рядов (в памяти и в БД)"""
+        test_config = self._get_test_config()
+        variants = test_config['variants']
+        control_variant = variants[0]
+        control_data = np.array(self.results_by_variant.get(control_variant, []))
+
+        for variant in variants:
+            data = np.array(self.results_by_variant.get(variant, []))
+            if len(data) == 0:
+                continue
+
+            cumulative_metric = float(np.sum(data))
+            mean_metric = float(np.mean(data))
+
+            # Расчет p-value для варианта против контроля
+            p_value = None
+            ci_lower = None
+            ci_upper = None
+
+            if variant != control_variant and len(control_data) >= 30 and len(data) >= 30:
+                try:
+                    from scipy import stats
+                    t_stat, p_value = stats.ttest_ind(control_data, data)
+                    p_value = float(p_value)
+
+                    # Расчет доверительного интервала
+                    mean_diff = mean_metric - np.mean(control_data)
+                    se_diff = np.sqrt(np.std(control_data, ddof=1)**2 / len(control_data) + np.std(data, ddof=1)**2 / len(data))
+                    ci = stats.t.interval(0.95, min(len(control_data), len(data)) - 1, loc=mean_diff, scale=se_diff)
+                    ci_lower = float(ci[0])
+                    ci_upper = float(ci[1])
+                except Exception:
+                    pass
+
+            snapshot = {
+                'test_id': self.config.test_id,
+                'users_processed': users_processed,
+                'variant': variant,
+                'cumulative_metric': cumulative_metric,
+                'mean_metric': mean_metric,
+                'sample_size': len(data),
+                'p_value': p_value,
+                'confidence_interval_lower': ci_lower,
+                'confidence_interval_upper': ci_upper,
+            }
+            self.time_series_data.append(snapshot)
+            
+            # Сохраняем в БД в реальном времени
+            self._save_snapshot_to_db_sync(snapshot)
+
+    def _save_snapshot_to_db_sync(self, snapshot: dict):
+        """Синхронное сохранение snapshot в БД (для использования во время симуляции)"""
+        try:
+            from backend.database.session import SessionLocal
+            from backend.database import crud
+
+            with SessionLocal() as db:
+                crud.create_ab_test_time_series(
+                    db,
+                    test_id=snapshot['test_id'],
+                    users_processed=snapshot['users_processed'],
+                    variant=snapshot['variant'],
+                    cumulative_metric=snapshot['cumulative_metric'],
+                    mean_metric=snapshot['mean_metric'],
+                    sample_size=snapshot['sample_size'],
+                    p_value=snapshot['p_value'],
+                    confidence_interval_lower=snapshot['confidence_interval_lower'],
+                    confidence_interval_upper=snapshot['confidence_interval_upper'],
+                    do_commit=True
+                )
+                # Логирование для отладки (каждые 100 пользователей)
+                if snapshot['users_processed'] % 100 == 0:
+                    print(f"  💾 Saved snapshot: {snapshot['variant']} | users={snapshot['users_processed']} | mean={snapshot['mean_metric']:.4f} | cum={snapshot['cumulative_metric']:.2f}")
+        except Exception as e:
+            # Тихо игнорируем ошибки сохранения, чтобы не прерывать симуляцию
+            print(f"⚠️ Warning: Failed to save time series snapshot to DB: {e}")
+
+    def _update_runtime_progress(
+        self,
+        users_processed: int,
+        sequential_look: Optional[int] = None,
+        srm_result: Optional[Any] = None,
+    ):
+        """Обновляет прогресс теста в БД во время выполнения симуляции."""
+        try:
+            with SessionLocal() as db:
+                test = db.query(ABTestORM).filter(ABTestORM.test_id == self.config.test_id).first()
+                if not test:
+                    return
+
+                target_users = test.sample_size or self.config.user_count or max(1, users_processed)
+                test.total_users = int(users_processed)
+                test.completion_percentage = float(min(100.0, (users_processed / max(1, target_users)) * 100.0))
+
+                if sequential_look is not None:
+                    test.current_sequential_look = int(sequential_look)
+
+                if srm_result is not None:
+                    test.srm_check_passed = 0 if srm_result.srm_detected else 1
+                    test.srm_p_value = float(srm_result.p_value)
+
+                db.commit()
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to update runtime progress: {e}")
+
+    def _wait_if_paused(self) -> bool:
+        """Ожидает, пока тест на паузе. Возвращает False, если тест остановлен/переведен в неподдерживаемый статус."""
+        while True:
+            with SessionLocal() as db:
+                test = db.query(ABTestORM).filter(ABTestORM.test_id == self.config.test_id).first()
+                if not test:
+                    return False
+
+                is_paused = test.status == "paused" or test.simulation_status == "paused"
+                if is_paused:
+                    time.sleep(0.5)
+                    continue
+
+                if test.status not in ["active", "paused"]:
+                    return False
+
+                return True
+
+    def _perform_interim_analysis(
+        self, 
+        users_processed: int
+    ) -> Dict[str, Any]:
+        """Промежуточный анализ с Sequential Testing и SRM check"""
+        test_config = self._get_test_config()
+        variants = test_config['variants']
+        control_variant = variants[0]
+        
+        # 1. SRM Check
+        srm_result = None
+        if self.config.enable_srm_check and self.srm_checker:
+            variant_counts = {
+                v: len(self.results_by_variant.get(v, []))
+                for v in variants
+            }
+            srm_result = self.srm_checker.check_srm_by_variant(variant_counts)
+            
+            if srm_result.srm_detected:
+                print(f"\n{srm_result.warning}")
+        
+        # 2. Statistical Test
+        control_data = np.array(self.results_by_variant.get(control_variant, []))
+        
+        results = {}
+        for variant in variants[1:]:
+            treatment_data = np.array(self.results_by_variant.get(variant, []))
+            
+            if len(control_data) < 30 or len(treatment_data) < 30:
+                continue
+            
+            # Основной тест
+            test_result = self.analyzer.analyze_continuous_metric(
+                control_data,
+                treatment_data,
+                num_comparisons=len(variants) - 1
+            )
+            
+            # Sequential Testing check
+            can_stop = False
+            stop_reason = None
+            
+            if self.sequential_tester:
+                can_stop, stop_reason = self.sequential_tester.should_stop_for_success(
+                    test_result.p_value,
+                    test_result.relative_uplift_percent
+                )
+                
+                # Futility check
+                if not can_stop:
+                    mde_target = test_config['mde_percent']
+                    can_stop_fut, stop_reason_fut = self.sequential_tester.should_stop_for_futility(
+                        test_result.relative_uplift_percent / 100.0,
+                        mde_target / 100.0,
+                        users_processed,
+                        test_config['sample_size'] or self.config.user_count
+                    )
+                    
+                    if can_stop_fut:
+                        can_stop = True
+                        stop_reason = stop_reason_fut
+            
+            results[variant] = {
+                'test_result': test_result,
+                'can_stop_early': can_stop,
+                'stop_reason': stop_reason
+            }
+        
+        return {
+            'users_processed': users_processed,
+            'srm_result': srm_result,
+            'variant_results': results,
+            'sequential_look': self.sequential_tester.current_look if self.sequential_tester else 0
+        }
+    
+    async def run_simulation(self) -> Dict[str, Any]:
+        """
+        Запуск симуляции A/B теста
+        
+        Returns:
+            Полный отчет с результатами
+        """
+        print(f"\n{'='*80}")
+        print(f"🚀 Starting Google-Standard A/B Test Simulation")
+        print(f"{'='*80}")
+        
+        test_config = self._get_test_config()
+        synthetic_data = self._load_synthetic_data()
+
+        dynamic_minutes = self._estimate_simulation_duration_minutes(
+            user_count=self.config.user_count,
+            sample_size=test_config.get('sample_size'),
+            confidence_level=float(test_config.get('confidence_level', 0.95)),
+        )
+        if self.config.simulation_duration_minutes is None:
+            self.config.simulation_duration_minutes = dynamic_minutes
+
+        delay_per_user = self._calculate_delay_per_user()
+        metric_profile = self._build_metric_profile(synthetic_data, test_config['primary_metric'])
+        
+        print(f"\n📊 Configuration:")
+        print(f"   Test ID: {self.config.test_id}")
+        print(f"   Dataset ID: {self.config.dataset_id}")
+        print(f"   Strategy: {self.config.traffic_split_strategy}")
+        print(f"   Variants: {test_config['variants']}")
+        print(f"   Primary Metric: {test_config['primary_metric']}")
+        print(f"   Users: {self.config.user_count}")
+        print(f"   Real-world Duration: {self.config.real_world_duration_days} days")
+        print(f"   Simulation Duration: {self.config.simulation_duration_minutes} min")
+        print(f"   Time Compression: {self.config.real_world_duration_days * 1440 / self.config.simulation_duration_minutes:.1f}x")
+        print(f"   Delay per User: {delay_per_user:.3f} sec")
+        
+        # Инициализация хранилища результатов
+        for variant in test_config['variants']:
+            self.results_by_variant[variant] = []
+        
+        start_time = datetime.utcnow()
+        variant_counts = {v: 0 for v in test_config['variants']}
+        
+        # Основной цикл симуляции
+        stop_simulation_early = False
+        for i, (_, user) in enumerate(synthetic_data.iterrows(), start=1):
+            user_id = str(user.get("user_id", i))
+            
+            # 0. Проверяем pause/resume в реальном времени
+            if not self._wait_if_paused():
+                print("⛔ Simulation interrupted: test status is no longer active")
+                break
+
+            # 1. Assign variant
+            variant = self.traffic_splitter.assign_variant(user_id, self.config.test_id)
+            variant_counts[variant] += 1
+            
+            # 2. Calculate metric value
+            primary_metric = test_config['primary_metric']
+
+            metric_value = self._generate_metric_value(
+                user=user,
+                variant=variant,
+                primary_metric=primary_metric,
+                metric_profile=metric_profile,
+                metric_type=str(test_config.get('metric_type', 'continuous')),
+            )
+            
+            # 3. Record result
+            self.results_by_variant[variant].append(metric_value)
+            
+            # 4. Update adaptive splitter (if using Thompson Sampling)
+            if self.config.traffic_split_strategy == "adaptive":
+                # Нормализуем metric для Thompson Sampling
+                normalized_reward = min(1.0, metric_value / 1000.0)
+                self.traffic_splitter.update(variant, normalized_reward)
+            
+            # 5. Progress logging
+            if i % 500 == 0 or i == self.config.user_count:
+                progress_pct = (i / self.config.user_count) * 100
+                # Показываем средние значения метрик по вариантам
+                variant_stats_log = {
+                    v: f"n={len(self.results_by_variant[v])}, mean={np.mean(self.results_by_variant[v]):.4f}"
+                    for v in test_config['variants']
+                }
+                print(f"\n📈 Progress: {i}/{self.config.user_count} ({progress_pct:.1f}%)")
+                print(f"   Variant Distribution: {variant_counts}")
+                print(f"   Variant Stats: {variant_stats_log}")
+
+            # 5a. Save time series snapshot (каждые N пользователей)
+            if i % self.time_series_interval == 0 or i == self.config.user_count:
+                self._save_time_series_snapshot(i)
+
+                self._update_runtime_progress(i)
+
+            # 6. Interim analysis (Sequential Testing + SRM)
+            if self._should_check_progress(i):
+                print(f"\n🔍 Performing Interim Analysis at {i} users...")
+                interim_results = self._perform_interim_analysis(i)
+                self._update_runtime_progress(
+                    users_processed=i,
+                    sequential_look=interim_results.get('sequential_look'),
+                    srm_result=interim_results.get('srm_result'),
+                )
+
+                # Check for early stopping
+                for variant, result in interim_results['variant_results'].items():
+                    if result['can_stop_early']:
+                        print(f"\n🎯 EARLY STOPPING TRIGGERED!")
+                        print(f"   Variant: {variant}")
+                        print(f"   Reason: {result['stop_reason']}")
+
+                        # Сохраняем в БД (асинхронно будет сделано в конце)
+                        # Помечаем в памяти для последующего сохранения
+                        self._early_stop_triggered = True
+                        self._early_stop_reason = result['stop_reason']
+                        self._sequential_look_at_stop = interim_results['sequential_look']
+
+                        # Реальная ранняя остановка теста
+                        stop_simulation_early = True
+                        break
+                if stop_simulation_early:
+                    break
+            
+            # 7. Delay для симуляции временной шкалы
+            if delay_per_user > 0.001:  # Только если delay значимый
+                await asyncio.sleep(delay_per_user)
+        
+        # Финальный анализ
+        print(f"\n{'='*80}")
+        print(f"📊 FINAL ANALYSIS")
+        print(f"{'='*80}")
+
+        final_results = self._generate_final_report(test_config, start_time)
+        final_results['users_processed'] = sum(len(v) for v in self.results_by_variant.values())
+
+        # Сохранение результатов в БД (асинхронно)
+        await self._save_results_to_db(final_results)
+
+        return final_results
+    
+    def _generate_final_report(
+        self, 
+        test_config: Dict[str, Any],
+        start_time: datetime
+    ) -> Dict[str, Any]:
+        """Генерация финального отчета"""
+        control_variant = test_config['variants'][0]
+        control_data = np.array(self.results_by_variant[control_variant])
+        
+        # Статистика по каждому варианту
+        variant_stats = {}
+        for variant in test_config['variants']:
+            data = np.array(self.results_by_variant[variant])
+            variant_stats[variant] = {
+                'sample_size': len(data),
+                'mean': float(np.mean(data)) if len(data) > 0 else 0.0,
+                'std': float(np.std(data, ddof=1)) if len(data) > 1 else 0.0,
+                'median': float(np.median(data)) if len(data) > 0 else 0.0,
+            }
+        
+        # Сравнение с контролем
+        comparisons = {}
+        for variant in test_config['variants'][1:]:
+            treatment_data = np.array(self.results_by_variant[variant])
+            
+            if len(control_data) >= 30 and len(treatment_data) >= 30:
+                full_analysis = run_full_ab_analysis(
+                    control_data,
+                    treatment_data,
+                    baseline_std=variant_stats[control_variant]['std'],
+                    mde_target=test_config['mde_percent'],
+                    metric_type="continuous",
+                    alpha=0.05
+                )
+                
+                comparisons[variant] = {
+                    'test_result': asdict(full_analysis['test_result']),
+                    'power': full_analysis['power'],
+                    'decision': full_analysis['decision'],
+                    'confidence': full_analysis['confidence']
+                }
+        
+        # SRM финальная проверка
+        variant_counts = {v: len(self.results_by_variant[v]) for v in test_config['variants']}
+        srm_final = self.srm_checker.check_srm_by_variant(variant_counts) if self.srm_checker else None
+        
+        # Traffic Split stats
+        traffic_stats = self.traffic_splitter.get_assignment_stats()
+        
+        end_time = datetime.utcnow()
+        duration = (end_time - start_time).total_seconds() / 60
+        
+        return {
+            'test_id': self.config.test_id,
+            'dataset_id': self.config.dataset_id,
+            'strategy': self.config.traffic_split_strategy,
+            'completed_at': end_time.isoformat(),
+            'duration_minutes': duration,
+            'real_world_equivalent_days': self.config.real_world_duration_days,
+            
+            'variant_stats': variant_stats,
+            'comparisons': comparisons,
+            'srm_check': asdict(srm_final) if srm_final else None,
+            'traffic_stats': traffic_stats,
+            
+            'sequential_testing': {
+                'enabled': self.config.enable_sequential_testing,
+                'looks_performed': self.sequential_tester.current_look if self.sequential_tester else 0,
+                'max_looks': self.config.max_sequential_looks
+            },
+            
+            'recommendation': self._generate_recommendation(comparisons, srm_final)
+        }
+    
+    def _generate_recommendation(
+        self,
+        comparisons: Dict[str, Any],
+        srm_result: Optional[Any]
+    ) -> Dict[str, str]:
+        """Генерирует рекомендацию на основе результатов"""
+        if srm_result and srm_result.srm_detected:
+            return {
+                'decision': 'INVALID - SRM DETECTED',
+                'reasoning': 'Sample Ratio Mismatch detected. Possible randomization bug. Do not trust results.',
+                'confidence': 'NONE'
+            }
+        
+        # Находим лучший вариант
+        best_variant = None
+        best_uplift = 0.0
+        high_confidence = False
+        
+        for variant, comp in comparisons.items():
+            test_result = comp['test_result']
+            if test_result['significant'] and comp['power'] >= 0.8:
+                uplift = test_result['relative_uplift_percent']
+                if uplift > best_uplift:
+                    best_variant = variant
+                    best_uplift = uplift
+                    high_confidence = True
+        
+        if best_variant:
+            return {
+                'decision': f'LAUNCH {best_variant}',
+                'reasoning': f'Significant uplift: +{best_uplift:.1f}%, adequate power, SRM passed',
+                'confidence': 'HIGH' if high_confidence else 'MEDIUM'
+            }
+        
+        return {
+            'decision': 'CONTINUE or STOP',
+            'reasoning': 'No significant winner found. Consider extending test or stopping.',
+            'confidence': 'LOW'
+        }
+    
+    async def _save_results_to_db(self, results: Dict[str, Any]):
+        """Асинхронное сохранение результатов в БД"""
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy import select
+            result = await db.execute(
+                select(ABTestORM).filter(ABTestORM.test_id == self.config.test_id)
+            )
+            test = result.scalar_one_or_none()
+
+            if test:
+                # Обновляем статус
+                test.status = 'completed'
+                test.simulation_status = None  # Сбрасываем статус симуляции
+                test.total_users = sum(
+                    stats['sample_size']
+                    for stats in results['variant_stats'].values()
+                )
+                processed_users = int(results.get('users_processed', 0))
+                target_users = test.sample_size or self.config.user_count or processed_users or 1
+                test.completion_percentage = float(min(100.0, (processed_users / max(1, target_users)) * 100.0))
+
+                # SRM результаты
+                if results['srm_check']:
+                    test.srm_check_passed = 0 if results['srm_check']['srm_detected'] else 1
+                    test.srm_p_value = results['srm_check']['p_value']
+
+                # Sequential testing и early stopping
+                if results['sequential_testing']['enabled']:
+                    test.current_sequential_look = results['sequential_testing']['looks_performed']
+
+                    # Сохраняем early stopping информацию
+                    if self._early_stop_triggered:
+                        test.stopped_early = 1
+                        test.early_stop_reason = self._early_stop_reason
+
+                await db.commit()
+                print(f"\n✅ Results saved to database")
+
+            # Временные ряды уже сохранены в реальном времени во время симуляции
+            print(f"✅ Time series data already saved in real-time: {len(self.time_series_data)} snapshots")
+
+
+# Удобная функция для запуска
+async def run_ab_test_simulation(
+    test_id: str,
+    dataset_id: int,
+    user_count: int = 1000,
+    real_world_days: int = 14,
+    simulation_minutes: Optional[int] = None,
+    strategy: str = "fixed",
+    variant_effects: Optional[Dict[str, Dict[str, float]]] = None
+) -> Dict[str, Any]:
+    """
+    Запуск A/B теста с синтетическими данными
+    
+    Args:
+        test_id: ID теста
+        dataset_id: ID GAN-датасета (ОБЯЗАТЕЛЬНО!)
+        user_count: Количество пользователей
+        real_world_days: Эквивалент реального времени
+        simulation_minutes: Фактическое время симуляции
+        strategy: "fixed" (рекомендуется) или "adaptive"
+        variant_effects: Эффекты вариантов для симуляции
+    
+    Returns:
+        Полный отчет с результатами
+    """
+    config = SimulationConfig(
+        test_id=test_id,
+        dataset_id=dataset_id,
+        user_count=user_count,
+        real_world_duration_days=real_world_days,
+        simulation_duration_minutes=simulation_minutes,
+        traffic_split_strategy=strategy,
+        enable_sequential_testing=True,
+        enable_srm_check=True,
+        variant_effects=variant_effects
+    )
+    
+    simulator = GoogleStandardABTestSimulator(config)
+    results = await simulator.run_simulation()
+    
+    return results

@@ -140,7 +140,11 @@ class AdaptiveABTest:
     def __init__(self, config: TestConfig):
         self.config = config
         self.bandit = ThompsonSamplingBandit()
-        self.data: Dict[str, List[float]] = {v: [] for v in config.variants}  # ← ЗДЕСЬ МОЖЕТ БЫТЬ ОШИБКА
+
+        if not isinstance(config.variants, list) or len(config.variants) == 0 or not all(isinstance(v, str) for v in config.variants):
+            raise ValueError(f"Invalid variants in TestConfig: expected non-empty list[str], got {config.variants}")
+
+        self.data: Dict[str, List[float]] = {v: [] for v in config.variants}
         self._initialize_bandit()
     
     def _initialize_bandit(self):

@@ -6,7 +6,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 import json
-from .core import ABTestManager, TestConfig, MetricType, TestResult
+from sqlalchemy import func
+from .core import ABTestManager, AdaptiveABTest, TestConfig, MetricType, TestResult
 
 @dataclass
 class TestSession:
@@ -179,6 +180,26 @@ class TestRegistry:
                 'completion_percentage': t.completion_percentage if hasattr(t, 'completion_percentage') else 0.0
             } for t in db_tests]
 
+    def force_update_test_from_database(self, test_id: str):
+        """
+        Принудительно обновляет статистику теста из базы данных
+        """
+        with SessionLocal() as db:
+            # Получаем статистику из базы данных
+            user_count = db.query(func.count(TestSessionORM.id)).filter(TestSessionORM.test_id == test_id).scalar() or 0
+
+            # Получаем тест из базы данных
+            db_test = db.query(ABTestORM).filter(ABTestORM.test_id == test_id).first()
+
+            if db_test:
+                # Обновляем статистику в реестре
+                completion_pct = db_test.completion_percentage if hasattr(db_test, 'completion_percentage') else 0.0
+                self.update_test_stats(test_id, user_count, completion_pct)
+
+                # Если тест завершен, обновляем его статус
+                if db_test.status == 'completed' and test_id in self.tests:
+                    self.tests[test_id]['status'] = 'completed'
+
 class AdaptiveABTestingPlatform:
     def __init__(self):
         self.test_manager = ABTestManager()
@@ -198,7 +219,7 @@ class AdaptiveABTestingPlatform:
 
     def _load_test_from_db(self, test_id: str) -> bool:
         with SessionLocal() as db:
-            db_test = db.query(ABTestORM).filter(ABTestORM.test_id == test_id, ABTestORM.status == "active").first()
+            db_test = db.query(ABTestORM).filter(ABTestORM.test_id == test_id).first()  # Убрано ограничение на статус "active"
             if db_test is None:
                 return False
 
@@ -213,8 +234,12 @@ class AdaptiveABTestingPlatform:
                 min_effect_size=db_test.min_effect_size,
             )
 
+            # Обновляем или создаем тест в менеджере
             if db_test.test_id not in self.test_manager.active_tests:
                 self.test_manager.create_test(config)
+            else:
+                # Если тест уже существует, обновляем его конфигурацию
+                self.test_manager.test_configs[config.test_id] = config
 
             self.test_registry.tests[db_test.test_id] = {
                 "config": {
@@ -242,6 +267,18 @@ class AdaptiveABTestingPlatform:
         if test_id in self.test_manager.active_tests:
             return True
         return self._load_test_from_db(test_id)
+    
+    def refresh_test_from_database(self, test_id: str):
+        """
+        Обновляет данные теста из базы данных
+        """
+        return self._load_test_from_db(test_id)
+    
+    def force_update_test_statistics(self, test_id: str):
+        """
+        Принудительно обновляет статистику теста из базы данных
+        """
+        self.test_registry.force_update_test_from_database(test_id)
 
     def create_ab_test(self,
                     test_id: str,
@@ -302,10 +339,56 @@ class AdaptiveABTestingPlatform:
 
     
     def get_test_results(self, test_id: str) -> Dict[str, Any]:
-        if not self._ensure_test_loaded(test_id):
-            raise ValueError(f"Test {test_id} not found")
+        # Проверяем, нужно ли обновить тест из базы данных
+        # Если теста нет в памяти, пробуем загрузить его из базы данных
+        if test_id not in self.test_manager.active_tests:
+            # Пытаемся загрузить тест из базы данных, независимо от статуса
+            loaded = self._load_test_from_db(test_id)
+            if not loaded:
+                raise ValueError(f"Test {test_id} not found")
+        
+        # Проверяем статус теста в базе данных
+        with SessionLocal() as db:
+            db_test = db.query(ABTestORM).filter(ABTestORM.test_id == test_id).first()
+            if db_test and db_test.status == 'completed':
+                # Если тест завершен, но не в памяти, попробуем создать его заново
+                # на основе данных из базы данных для получения результатов
+                if test_id not in self.test_manager.active_tests:
+                    # Создаем временный тест на основе данных из базы
+                    config = TestConfig(
+                        test_id=db_test.test_id,
+                        variants=db_test.variants or [],
+                        primary_metric=db_test.primary_metric,
+                        metric_type=self._parse_metric_type(db_test.metric_type),
+                        sample_size=db_test.sample_size,
+                        confidence_level=db_test.confidence_level,
+                        power=db_test.power,
+                        min_effect_size=db_test.min_effect_size,
+                    )
+                    
+                    # Создаем временный тест для получения результатов
+                    temp_test = AdaptiveABTest(config)
+                    
+                    # Загружаем данные сессий для этого теста
+                    sessions = db.query(TestSessionORM).filter(TestSessionORM.test_id == test_id).all()
+                    
+                    # Распределяем метрики по вариантам
+                    for session in sessions:
+                        if session.metrics and session.variant in config.variants:
+                            for metric_name, value in session.metrics.items():
+                                if metric_name == config.primary_metric:
+                                    temp_test.record_observation(session.variant, value)
+                    
+                    # Получаем результаты из временного теста
+                    results = temp_test.get_results()
+                    p_values = temp_test.calculate_statistical_significance()
+                else:
+                    # Если тест в памяти, используем его
+                    results, p_values = self.test_manager.get_test_results(test_id)
+            else:
+                # Для активных тестов используем обычную логику
+                results, p_values = self.test_manager.get_test_results(test_id)
 
-        results, p_values = self.test_manager.get_test_results(test_id)
         session_metrics = self.session_manager.get_session_metrics(test_id)
         summary = self._generate_summary(results, p_values)
         pm_summary = self._build_pm_summary(results, p_values, summary)
@@ -367,6 +450,27 @@ class AdaptiveABTestingPlatform:
             completion_pct = 0.0
         
         self.test_registry.update_test_stats(test_id, user_count, completion_pct)
+    
+    def force_update_test_from_database(self, test_id: str):
+        """
+        Принудительно обновляет статистику теста из базы данных
+        """
+        with SessionLocal() as db:
+            # Получаем статистику из базы данных
+            user_count = db.query(func.count(TestSessionORM.id)).filter(TestSessionORM.test_id == test_id).scalar() or 0
+            
+            # Получаем тест из базы данных
+            db_test = db.query(ABTestORM).filter(ABTestORM.test_id == test_id).first()
+            
+            if db_test:
+                # Обновляем статистику в реестре
+                completion_pct = db_test.completion_percentage if hasattr(db_test, 'completion_percentage') else 0.0
+                self.test_registry.update_test_stats(test_id, user_count, completion_pct)
+                
+                # Если тест завершен, удаляем его из активных тестов
+                if db_test.status == 'completed' and test_id in self.test_manager.active_tests:
+                    del self.test_manager.active_tests[test_id]
+                    del self.test_manager.test_configs[test_id]
 
     
     def _generate_summary(self, results: Dict[str, TestResult], p_values: Dict[str, float]) -> Dict[str, Any]:

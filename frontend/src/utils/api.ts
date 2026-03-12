@@ -48,8 +48,15 @@ export const abTestAPI = {
   createTest: (data: any) => api.post('/tests/', data),
   assignUser: (testId: string, data: any) => api.post(`/tests/${testId}/assign`, data),
   getResults: (testId: string) => api.get(`/tests/${testId}/results`),
-  getActiveTests: () => api.get('/tests/'),
+  getAllTests: () => api.get('/tests/'),  // Новый endpoint для получения всех тестов по статусам
   stopTest: (testId: string, reason: string) => api.post(`/tests/${testId}/stop`, { reason }),
+  // Новые endpoints для управления тестами
+  startSimulation: (testId: string, data: any) => api.post(`/tests/${testId}/start-simulation`, data),
+  pauseTest: (testId: string, reason?: string) => api.post(`/tests/${testId}/pause`, reason ? { reason } : {}),
+  resumeTest: (testId: string) => api.post(`/tests/${testId}/resume`),
+  deleteTestWithOption: (testId: string, moveToArchived: boolean) => api.post(`/tests/${testId}/delete-with-option`, { move_to_archived: moveToArchived }),
+  archiveTest: (testId: string, reason?: string) => api.post(`/tests/${testId}/archive`, reason ? { reason } : {}),
+  permanentlyDeleteTest: (testId: string) => api.delete(`/tests/${testId}/permanent`),
 };
 
 // Data Generation API
@@ -77,6 +84,7 @@ export const resultsAPI = {
   getStatisticalSignificance: (testId: string, alpha: number = 0.05) =>
     api.get(`/results/${testId}/statistical-significance?alpha=${alpha}`),
   getPlatformStats: () => api.get('/results/platform/performance'),
+  getTimeSeriesData: (testId: string) => api.get(`/results/${testId}/time-series-data`),
 };
 
 // Auth API

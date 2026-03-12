@@ -7,6 +7,7 @@ import { Dashboard } from './components/Dashboard/Dashboard';
 import { TestCreator } from './components/TestCreator/TestCreator';
 import { GANManager } from './components/GANManager/GANManager';
 import { TemplatesPage } from './components/Templates/TemplatesPage';
+import { ResultsPage } from './components/Results/ResultsPage';
 import { LoginPage } from './components/Auth/LoginPage';
 import { ProtectedRoute } from './components/Auth/ProtectedRoute';
 import { useAuth } from './context/AuthContext';
@@ -164,7 +165,7 @@ const AppRoutes: React.FC = () => {
         element={
           <ProtectedRoute allowedRoles={['developer', 'manager']}>
             <AuthorizedLayout>
-              <div>Results Page</div>
+              <ResultsPage />
             </AuthorizedLayout>
           </ProtectedRoute>
         }
