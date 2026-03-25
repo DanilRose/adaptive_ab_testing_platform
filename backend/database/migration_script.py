@@ -20,7 +20,8 @@ def migrate_ab_tests_table():
         ADD COLUMN IF NOT EXISTS srm_check_passed INTEGER,
         ADD COLUMN IF NOT EXISTS srm_p_value FLOAT,
         ADD COLUMN IF NOT EXISTS traffic_split_type VARCHAR(32) DEFAULT 'fixed' NOT NULL,
-        ADD COLUMN IF NOT EXISTS traffic_split_seed INTEGER DEFAULT 42 NOT NULL;
+        ADD COLUMN IF NOT EXISTS traffic_split_seed INTEGER DEFAULT 42 NOT NULL,
+        ADD COLUMN IF NOT EXISTS extra_config JSONB;
         """,
 
         """
@@ -69,7 +70,7 @@ def migrate_ab_tests_table():
                 conn.commit()
                 print(f"Миграция {i} выполнена успешно")
             except Exception as e:
-                print(f"⚠️  Миграция {i} пропущена или выполнена ранее: {e}")
+                print(f"Миграция {i} пропущена или выполнена ранее: {e}")
                 conn.rollback()
 
 

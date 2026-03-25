@@ -2,10 +2,9 @@
 
 import uuid
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
-import json
 from sqlalchemy import func
 from .core import ABTestManager, AdaptiveABTest, TestConfig, MetricType, TestResult
 
@@ -276,9 +275,16 @@ class AdaptiveABTestingPlatform:
     
     def force_update_test_statistics(self, test_id: str):
         """
-        Принудительно обновляет статистику теста из базы данных
+        Принудительно обновляет статистику теста из базы данных.
+        Сохраняет прежнее поведение: завершённые тесты выгружаются из in-memory active_tests.
         """
         self.test_registry.force_update_test_from_database(test_id)
+
+        with SessionLocal() as db:
+            db_test = db.query(ABTestORM).filter(ABTestORM.test_id == test_id).first()
+            if db_test and db_test.status == 'completed' and test_id in self.test_manager.active_tests:
+                del self.test_manager.active_tests[test_id]
+                del self.test_manager.test_configs[test_id]
 
     def create_ab_test(self,
                     test_id: str,
@@ -450,28 +456,6 @@ class AdaptiveABTestingPlatform:
             completion_pct = 0.0
         
         self.test_registry.update_test_stats(test_id, user_count, completion_pct)
-    
-    def force_update_test_from_database(self, test_id: str):
-        """
-        Принудительно обновляет статистику теста из базы данных
-        """
-        with SessionLocal() as db:
-            # Получаем статистику из базы данных
-            user_count = db.query(func.count(TestSessionORM.id)).filter(TestSessionORM.test_id == test_id).scalar() or 0
-            
-            # Получаем тест из базы данных
-            db_test = db.query(ABTestORM).filter(ABTestORM.test_id == test_id).first()
-            
-            if db_test:
-                # Обновляем статистику в реестре
-                completion_pct = db_test.completion_percentage if hasattr(db_test, 'completion_percentage') else 0.0
-                self.test_registry.update_test_stats(test_id, user_count, completion_pct)
-                
-                # Если тест завершен, удаляем его из активных тестов
-                if db_test.status == 'completed' and test_id in self.test_manager.active_tests:
-                    del self.test_manager.active_tests[test_id]
-                    del self.test_manager.test_configs[test_id]
-
     
     def _generate_summary(self, results: Dict[str, TestResult], p_values: Dict[str, float]) -> Dict[str, Any]:
         if not results:

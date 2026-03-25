@@ -22,10 +22,14 @@ import {
   Table,
   Switch,
   Popconfirm,
+  Alert,
+  Typography,
 } from 'antd';
-import { PlusOutlined, ReloadOutlined, DownloadOutlined, StopOutlined, QuestionCircleOutlined, DeleteOutlined, PlayCircleOutlined } from '@ant-design/icons';
-import { dataAPI } from '../../utils/api';
+import { PlusOutlined, ReloadOutlined, DownloadOutlined, StopOutlined, QuestionCircleOutlined, DeleteOutlined, PlayCircleOutlined, FileTextOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { dataAPI, templatesAPI } from '../../utils/api';
 import type { GANTrainingPayload, SyntheticGenerationPayload } from '../../types';
+
+const { Text } = Typography;
 
 interface GANTuningForm extends GANTrainingPayload {
   LATENT_DIM?: number;
@@ -60,7 +64,7 @@ const GAN_CONFIG_FIELDS: Array<{ name: keyof GANTuningForm; label: string; toolt
   },
   {
     name: 'LEARNING_RATE',
-    label: 'Learning rate',
+    label: 'Скорость обучения',
     tooltip: 'Скорость обучения модели. Меньше = медленнее, но стабильнее. Больше = быстрее, но может не сойтись. Рекомендуется: 0.0001-0.0003',
     type: 'number',
     min: 0.00001,
@@ -69,7 +73,7 @@ const GAN_CONFIG_FIELDS: Array<{ name: keyof GANTuningForm; label: string; toolt
   },
   {
     name: 'DROPOUT_RATE',
-    label: 'Dropout',
+    label: 'Дропаут',
     tooltip: 'Процент нейронов, отключаемых при обучении для предотвращения переобучения. Рекомендуется: 0.2-0.5',
     type: 'number',
     min: 0,
@@ -78,7 +82,7 @@ const GAN_CONFIG_FIELDS: Array<{ name: keyof GANTuningForm; label: string; toolt
   },
   {
     name: 'LAMBDA_GP',
-    label: 'Lambda GP',
+    label: 'Коэффициент градиентного штрафа (Lambda GP)',
     tooltip: 'Вес штрафа за нарушение условия Липшица (gradient penalty) в WGAN-GP. Контролирует стабильность обучения. Рекомендуется: 10',
     type: 'number',
     min: 1,
@@ -87,7 +91,7 @@ const GAN_CONFIG_FIELDS: Array<{ name: keyof GANTuningForm; label: string; toolt
   },
   {
     name: 'N_CRITIC',
-    label: 'N Critic',
+    label: 'Число шагов дискриминатора (N Critic)',
     tooltip: 'Сколько раз обновляется дискриминатор на одно обновление генератора. Больше = дискриминатор сильнее. Рекомендуется: 3-5',
     type: 'number',
     min: 1,
@@ -127,6 +131,15 @@ export const GANManager: React.FC = () => {
   const [dataPreviewModal, setDataPreviewModal] = useState<{ visible: boolean; dataset?: any }>({ visible: false });
   const [filterDraft, setFilterDraft] = useState<Record<string, any>>({});
 
+  // Шаблоны
+  const [ganTemplates, setGanTemplates] = useState<any[]>([]);
+  const [syntheticTemplates, setSyntheticTemplates] = useState<any[]>([]);
+  const [ganTemplateModal, setGanTemplateModal] = useState(false);
+  const [syntheticTemplateModal, setSyntheticTemplateModal] = useState(false);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [appliedGanTemplate, setAppliedGanTemplate] = useState<string | null>(null);
+  const [appliedSyntheticTemplate, setAppliedSyntheticTemplate] = useState<string | null>(null);
+
   useEffect(() => {
     configForm.setFieldsValue({
       epochs: 50,
@@ -156,7 +169,7 @@ export const GANManager: React.FC = () => {
       const response = await dataAPI.getGANStatus();
       setGanStatus(response.data || {});
     } catch (error) {
-      console.error('Error loading GAN status:', error);
+      console.error('Ошибка загрузки статуса GAN:', error);
       setGanStatus({ status: 'error', is_trained: false });
     }
   };
@@ -166,7 +179,7 @@ export const GANManager: React.FC = () => {
       const response = await dataAPI.getGANCheckpoints();
       setCheckpoints(response.data?.checkpoints || []);
     } catch (error) {
-      console.error('Error loading checkpoints:', error);
+      console.error('Ошибка загрузки чекпоинтов:', error);
       setCheckpoints([]);
     }
   };
@@ -176,7 +189,7 @@ export const GANManager: React.FC = () => {
       const response = await dataAPI.getDatasetStats();
       setFilterOptions(response.data || {});
     } catch (error) {
-      console.error('Error loading dataset stats:', error);
+      console.error('Ошибка загрузки статистики датасета:', error);
     }
   };
 
@@ -186,7 +199,7 @@ export const GANManager: React.FC = () => {
       const response = await dataAPI.listGeneratedHistory(25);
       setGeneratedHistory(response.data?.items || []);
     } catch (error) {
-      console.error('Error loading history:', error);
+      console.error('Ошибка загрузки истории:', error);
     } finally {
       if (withSpinner) setHistoryLoading(false);
     }
@@ -545,6 +558,106 @@ export const GANManager: React.FC = () => {
     }
   };
 
+  const loadTemplatesForGAN = async () => {
+    setLoadingTemplates(true);
+    try {
+      const response = await templatesAPI.listTemplates('gan_config');
+      setGanTemplates(response.data.items || []);
+    } catch (e) {
+      message.error('Ошибка загрузки шаблонов GAN');
+    } finally {
+      setLoadingTemplates(false);
+    }
+  };
+
+  const loadTemplatesForSynthetic = async () => {
+    setLoadingTemplates(true);
+    try {
+      const response = await templatesAPI.listTemplates('synthetic_data');
+      setSyntheticTemplates(response.data.items || []);
+    } catch (e) {
+      message.error('Ошибка загрузки шаблонов синтетических данных');
+    } finally {
+      setLoadingTemplates(false);
+    }
+  };
+
+  const applyGANTemplate = (template: any) => {
+    const cfg = template.config_json;
+    configForm.setFieldsValue({
+      epochs: cfg.epochs,
+      real_data_samples: cfg.real_data_samples,
+      save_checkpoint: cfg.save_checkpoint ?? true,
+      checkpoint_name: cfg.checkpoint_name,
+      LATENT_DIM: cfg.LATENT_DIM,
+      BATCH_SIZE: cfg.BATCH_SIZE,
+      LEARNING_RATE: cfg.LEARNING_RATE,
+      DROPOUT_RATE: cfg.DROPOUT_RATE,
+      LAMBDA_GP: cfg.LAMBDA_GP,
+      N_CRITIC: cfg.N_CRITIC,
+      GENERATOR_LAYERS: cfg.GENERATOR_LAYERS,
+      DISCRIMINATOR_LAYERS: cfg.DISCRIMINATOR_LAYERS,
+      USE_WGAN_GP: cfg.USE_WGAN_GP,
+    });
+    setAppliedGanTemplate(template.name);
+    setGanTemplateModal(false);
+    message.success(`Шаблон GAN "${template.name}" применён`);
+  };
+
+  const applySyntheticTemplate = (template: any) => {
+    const cfg = template.config_json;
+    syntheticForm.setFieldsValue({
+      num_users: cfg.num_users,
+      evaluation_metrics: cfg.evaluation_metrics ?? true,
+      dataset_name: cfg.dataset_name,
+    });
+    if (cfg.filters) {
+      setFilterDraft(cfg.filters);
+    }
+    setAppliedSyntheticTemplate(template.name);
+    setSyntheticTemplateModal(false);
+    message.success(`Шаблон "${template.name}" применён`);
+  };
+
+  const templateActionColumns = (onApply: (record: any) => void) => [
+    {
+      title: 'Название',
+      dataIndex: 'name',
+      render: (name: string, record: any) => (
+        <div>
+          <Text strong>{name}</Text>
+          {record.description && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {record.description.length > 100 ? record.description.slice(0, 100) + '...' : record.description}
+              </Text>
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: 'Теги',
+      dataIndex: 'tags',
+      width: 200,
+      render: (tags: string[]) => (
+        <Space size={4} wrap>
+          {(tags || []).map((tag: string) => <Tag key={tag} style={{ fontSize: 11 }}>{tag}</Tag>)}
+        </Space>
+      ),
+    },
+    {
+      title: '',
+      key: 'action',
+      width: 120,
+      render: (_: any, record: any) => (
+        <Button type="primary" size="small" icon={<ThunderboltOutlined />} onClick={() => onApply(record)}>
+          Применить
+        </Button>
+      ),
+    },
+  ];
+
   const historyColumns = (onPreview?: (record: any) => void) => [
     {
       title: 'Название набора',
@@ -584,6 +697,7 @@ export const GANManager: React.FC = () => {
   const isTraining = ganStatus.status === 'training';
   const isStopped = ganStatus.status === 'training_paused';
   const isTrainingOrStopped = isTraining || isStopped;
+  const canGenerateSynthetic = Boolean(ganStatus.is_trained) || ganStatus.status === 'checkpoint_loaded';
 
   const getFriendlyStatus = () => {
     // Статус 1.1: Чекпоинт не загружен
@@ -656,23 +770,23 @@ export const GANManager: React.FC = () => {
       {ganStatus.config && Object.keys(ganStatus.config).length > 0 && (
         <Card title={!ganStatus.is_trained && !isTraining ? "Последняя конфигурация обучаемой модели" : "Текущая конфигурация модели"} style={{ marginTop: 20 }}>
           <Descriptions bordered column={3}>
-            <Descriptions.Item label="Эпохи">{ganStatus.config.EPOCHS || 'N/A'}</Descriptions.Item>
-            <Descriptions.Item label="Размер батча">{ganStatus.config.BATCH_SIZE || 'N/A'}</Descriptions.Item>
-            <Descriptions.Item label="Learning Rate">{ganStatus.config.LEARNING_RATE || 'N/A'}</Descriptions.Item>
+            <Descriptions.Item label="Эпохи">{ganStatus.config.EPOCHS || 'Н/Д'}</Descriptions.Item>
+            <Descriptions.Item label="Размер батча">{ganStatus.config.BATCH_SIZE || 'Н/Д'}</Descriptions.Item>
+            <Descriptions.Item label="Скорость обучения">{ganStatus.config.LEARNING_RATE || 'Н/Д'}</Descriptions.Item>
             <Descriptions.Item label="WGAN-GP режим">{ganStatus.config.USE_WGAN_GP ? 'Да' : 'Нет'}</Descriptions.Item>
-            <Descriptions.Item label="Lambda GP">{ganStatus.config.LAMBDA_GP || 'N/A'}</Descriptions.Item>
-            <Descriptions.Item label="N Critic">{ganStatus.config.N_CRITIC || 'N/A'}</Descriptions.Item>
-            <Descriptions.Item label="Latent Dim">{ganStatus.config.LATENT_DIM || 'N/A'}</Descriptions.Item>
-            <Descriptions.Item label="Dropout">{ganStatus.config.DROPOUT_RATE || 'N/A'}</Descriptions.Item>
-            <Descriptions.Item label="Устройство">{ganStatus.config.DEVICE || 'N/A'}</Descriptions.Item>
-            <Descriptions.Item label="G Loss" span={1}>
-              {ganStatus.loss_history?.latest_g_loss?.toFixed(4) || 'N/A'}
+            <Descriptions.Item label="Коэффициент Lambda GP">{ganStatus.config.LAMBDA_GP || 'Н/Д'}</Descriptions.Item>
+            <Descriptions.Item label="Число шагов N Critic">{ganStatus.config.N_CRITIC || 'Н/Д'}</Descriptions.Item>
+            <Descriptions.Item label="Размер латентного вектора">{ganStatus.config.LATENT_DIM || 'Н/Д'}</Descriptions.Item>
+            <Descriptions.Item label="Дропаут">{ganStatus.config.DROPOUT_RATE || 'Н/Д'}</Descriptions.Item>
+            <Descriptions.Item label="Устройство">{ganStatus.config.DEVICE || 'Н/Д'}</Descriptions.Item>
+            <Descriptions.Item label="Потери генератора (G Loss)" span={1}>
+              {ganStatus.loss_history?.latest_g_loss?.toFixed(4) || 'Н/Д'}
             </Descriptions.Item>
-            <Descriptions.Item label="D Loss" span={1}>
-              {ganStatus.loss_history?.latest_d_loss?.toFixed(4) || 'N/A'}
+            <Descriptions.Item label="Потери дискриминатора (D Loss)" span={1}>
+              {ganStatus.loss_history?.latest_d_loss?.toFixed(4) || 'Н/Д'}
             </Descriptions.Item>
-            <Descriptions.Item label="Wasserstein" span={1}>
-              {ganStatus.loss_history?.latest_wasserstein?.toFixed(4) || 'N/A'}
+            <Descriptions.Item label="Метрика Вассерштейна" span={1}>
+              {ganStatus.loss_history?.latest_wasserstein?.toFixed(4) || 'Н/Д'}
             </Descriptions.Item>
           </Descriptions>
         </Card>
@@ -687,6 +801,28 @@ export const GANManager: React.FC = () => {
               label: 'Конфигурация и обучение GAN',
               children: (
                 <Form form={configForm} layout="vertical">
+                  {/* Кнопка шаблонов GAN */}
+                  <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
+                    <Button
+                      icon={<FileTextOutlined />}
+                      type="dashed"
+                      onClick={() => { setGanTemplateModal(true); loadTemplatesForGAN(); }}
+                      disabled={isTrainingOrStopped}
+                    >
+                      Выбрать из шаблонов GAN
+                    </Button>
+                  </div>
+                  {appliedGanTemplate && (
+                    <Alert
+                      type="success"
+                      showIcon
+                      icon={<FileTextOutlined />}
+                      message={`Применён шаблон: "${appliedGanTemplate}"`}
+                      style={{ marginBottom: 12 }}
+                      closable
+                      onClose={() => setAppliedGanTemplate(null)}
+                    />
+                  )}
                   {isTrainingOrStopped && (
                     <div style={{ marginBottom: 24, padding: 16, background: '#f0f2f5', borderRadius: 8 }}>
                       <div style={{ marginBottom: 12 }}>
@@ -759,7 +895,7 @@ export const GANManager: React.FC = () => {
                         <Col span={8}>
                           <Form.Item
                             name="real_data_samples"
-                            label="Samples для обучения"
+                            label="Количество записей для обучения"
                             rules={[{ required: true, message: 'Укажите количество примеров' }]}
                           >
                             <InputNumber min={1000} max={100000} step={1000} style={{ width: '100%' }} />
@@ -838,8 +974,8 @@ export const GANManager: React.FC = () => {
                           title={checkpoint.name || checkpoint.filename}
                           description={
                             <div>
-                              <div>Размер: {checkpoint.metrics?.size ? `${(checkpoint.metrics.size / 1024 / 1024).toFixed(2)} MB` : 'N/A'}</div>
-                              <div>Изменен: {checkpoint.created_at ? new Date(checkpoint.created_at).toLocaleString() : 'N/A'}</div>
+                              <div>Размер: {checkpoint.metrics?.size ? `${(checkpoint.metrics.size / 1024 / 1024).toFixed(2)} МБ` : 'Н/Д'}</div>
+                              <div>Изменён: {checkpoint.created_at ? new Date(checkpoint.created_at).toLocaleString() : 'Н/Д'}</div>
                             </div>
                           }
                         />
@@ -854,6 +990,27 @@ export const GANManager: React.FC = () => {
               label: 'Генерация синтетических данных',
               children: (
                 <Form form={syntheticForm} layout="vertical">
+                  {/* Кнопка шаблонов синтетических данных */}
+                  <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
+                    <Button
+                      icon={<FileTextOutlined />}
+                      type="dashed"
+                      onClick={() => { setSyntheticTemplateModal(true); loadTemplatesForSynthetic(); }}
+                    >
+                      Выбрать из шаблонов генерации
+                    </Button>
+                  </div>
+                  {appliedSyntheticTemplate && (
+                    <Alert
+                      type="success"
+                      showIcon
+                      icon={<FileTextOutlined />}
+                      message={`Применён шаблон: "${appliedSyntheticTemplate}"`}
+                      style={{ marginBottom: 12 }}
+                      closable
+                      onClose={() => setAppliedSyntheticTemplate(null)}
+                    />
+                  )}
                   <Row gutter={16}>
                     <Col span={6}>
                       <Form.Item
@@ -893,7 +1050,7 @@ export const GANManager: React.FC = () => {
                     </div>
                   )}
                   <Space>
-                    <Button type="primary" onClick={handleGenerateData} loading={loading} disabled={!ganStatus.is_trained || isTrainingOrStopped} icon={<PlusOutlined />}>
+                    <Button type="primary" onClick={handleGenerateData} loading={loading} disabled={!canGenerateSynthetic || isTrainingOrStopped} icon={<PlusOutlined />}>
                       Сгенерировать данные
                     </Button>
                     <Button onClick={() => syntheticForm.resetFields()} icon={<ReloadOutlined />}>Сбросить форму</Button>
@@ -952,6 +1109,60 @@ export const GANManager: React.FC = () => {
         ) : (
           'Нет данных'
         )}
+      </Modal>
+
+      {/* Модальное окно шаблонов GAN */}
+      <Modal
+        title={
+          <Space>
+            <FileTextOutlined />
+            <span>Выберите шаблон GAN конфигурации</span>
+          </Space>
+        }
+        open={ganTemplateModal}
+        onCancel={() => setGanTemplateModal(false)}
+        footer={null}
+        width={800}
+      >
+        <Text type="secondary" style={{ marginBottom: 12, display: 'block' }}>
+          Шаблон заполнит форму обучения GAN. После применения все поля можно изменить.
+        </Text>
+        <Table
+          dataSource={ganTemplates}
+          columns={templateActionColumns(applyGANTemplate)}
+          rowKey="id"
+          loading={loadingTemplates}
+          pagination={{ pageSize: 8 }}
+          size="small"
+          locale={{ emptyText: 'Нет доступных шаблонов GAN конфигураций' }}
+        />
+      </Modal>
+
+      {/* Модальное окно шаблонов синтетических данных */}
+      <Modal
+        title={
+          <Space>
+            <FileTextOutlined />
+            <span>Выберите шаблон генерации данных</span>
+          </Space>
+        }
+        open={syntheticTemplateModal}
+        onCancel={() => setSyntheticTemplateModal(false)}
+        footer={null}
+        width={800}
+      >
+        <Text type="secondary" style={{ marginBottom: 12, display: 'block' }}>
+          Шаблон заполнит форму генерации синтетических данных включая фильтры. После применения всё можно изменить.
+        </Text>
+        <Table
+          dataSource={syntheticTemplates}
+          columns={templateActionColumns(applySyntheticTemplate)}
+          rowKey="id"
+          loading={loadingTemplates}
+          pagination={{ pageSize: 8 }}
+          size="small"
+          locale={{ emptyText: 'Нет доступных шаблонов синтетических данных' }}
+        />
       </Modal>
 
     </div>

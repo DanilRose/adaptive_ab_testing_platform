@@ -9,12 +9,12 @@ from sqlalchemy.orm import Session
 
 from backend.database.models import UserORM
 from backend.database.session import Base, engine
+from backend.database.migration_script import migrate_ab_tests_table
 from backend.auth.service import get_password_hash
 
 
 logger = logging.getLogger(__name__)
 
-# Индексы, которые нужно создать с IF NOT EXISTS (SQLAlchemy не поддерживает это нативно)
 _EXTRA_INDEXES = [
     "CREATE INDEX IF NOT EXISTS ix_ab_tests_status_created_at ON ab_tests (status, created_at)",
     "CREATE INDEX IF NOT EXISTS ix_ab_tests_dataset_id ON ab_tests (dataset_id)",
@@ -75,5 +75,13 @@ def seed_default_users() -> None:
 
 def bootstrap_database() -> None:
     create_tables()
+
+    # create_all() не изменяет уже существующие таблицы.
+    # Догоняем эволюцию схемы (в т.ч. ab_tests.extra_config) через идемпотентные SQL-миграции.
+    try:
+        migrate_ab_tests_table()
+    except Exception as exc:
+        logger.warning("Schema migration step failed during bootstrap: %s", exc)
+
     seed_default_users()
     logger.info("Database bootstrap completed")

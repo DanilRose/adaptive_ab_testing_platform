@@ -1,6 +1,13 @@
 // frontend/src/utils/api.ts
 import axios from 'axios';
-import type { LoginCredentials } from '../types';
+import type {
+  ABTestCreatePayload,
+  LoginCredentials,
+  StartSimulationPayload,
+  SyntheticGenerationPayload,
+  TimeSeriesResponse,
+  UserAssignmentPayload,
+} from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
@@ -45,28 +52,30 @@ api.interceptors.response.use(
 
 // A/B Tests API
 export const abTestAPI = {
-  createTest: (data: any) => api.post('/tests/', data),
-  assignUser: (testId: string, data: any) => api.post(`/tests/${testId}/assign`, data),
+  createTest: (data: ABTestCreatePayload) => api.post('/tests/', data),
+  assignUser: (testId: string, data: UserAssignmentPayload) => api.post(`/tests/${testId}/assign`, data),
   getResults: (testId: string) => api.get(`/tests/${testId}/results`),
-  getAllTests: () => api.get('/tests/'),  // Новый endpoint для получения всех тестов по статусам
+  getAllTests: () => api.get('/tests/'),
   stopTest: (testId: string, reason: string) => api.post(`/tests/${testId}/stop`, { reason }),
-  // Новые endpoints для управления тестами
-  startSimulation: (testId: string, data: any) => api.post(`/tests/${testId}/start-simulation`, data),
+  startSimulation: (testId: string, data: StartSimulationPayload) => api.post(`/tests/${testId}/start-simulation`, data),
   pauseTest: (testId: string, reason?: string) => api.post(`/tests/${testId}/pause`, reason ? { reason } : {}),
   resumeTest: (testId: string) => api.post(`/tests/${testId}/resume`),
-  deleteTestWithOption: (testId: string, moveToArchived: boolean) => api.post(`/tests/${testId}/delete-with-option`, { move_to_archived: moveToArchived }),
+  deleteTestWithOption: (testId: string, moveToArchived: boolean) =>
+    api.post(`/tests/${testId}/delete-with-option`, { move_to_archived: moveToArchived }),
   archiveTest: (testId: string, reason?: string) => api.post(`/tests/${testId}/archive`, reason ? { reason } : {}),
   permanentlyDeleteTest: (testId: string) => api.delete(`/tests/${testId}/permanent`),
 };
 
 // Data Generation API
 export const dataAPI = {
-  generateRealData: (data: any) => api.post('/data/generate-real', data),
-  trainGAN: (data: any) => api.post('/data/train-gan', data),
+  generateRealData: (data: { num_samples: number; save_to_file?: boolean; include_evaluation?: boolean; filters?: Record<string, unknown> }) =>
+    api.post('/data/generate-real', data),
+  trainGAN: (data: { epochs: number; real_data_samples: number; save_checkpoint: boolean; checkpoint_name?: string; gan_config?: Record<string, unknown> }) =>
+    api.post('/data/train-gan', data),
   stopGANTraining: () => api.post('/data/stop-gan-training'),
   resumeGANTraining: () => api.post('/data/resume-gan-training'),
   resetGANTraining: () => api.post('/data/reset-gan-training'),
-  generateSynthetic: (data: any) => api.post('/data/generate-synthetic', data),
+  generateSynthetic: (data: SyntheticGenerationPayload) => api.post('/data/generate-synthetic', data),
   getGANStatus: () => api.get('/data/gan-status'),
   getGANCheckpoints: () => api.get('/data/gan-checkpoints'),
   deleteGANCheckpoint: (checkpointId: number) => api.delete(`/data/gan-checkpoints/${checkpointId}`),
@@ -75,7 +84,18 @@ export const dataAPI = {
   getFullDataset: (itemId: number) => api.get(`/data/generated-history/${itemId}/full`),
   deleteGeneratedHistoryItem: (itemId: number) => api.delete(`/data/generated-history/${itemId}`),
   loadGANCheckpoint: (checkpointName: string) => api.post('/data/gan-load-checkpoint', { checkpoint_name: checkpointName }),
-  runABTestOnSynthetic: (data: any) => api.post('/data/run-ab-test-simulation', data),
+  runABTestOnSynthetic: (data: StartSimulationPayload & { test_id: string }) => api.post('/data/run-ab-test-simulation', data),
+};
+
+// Templates API
+export const templatesAPI = {
+  listTemplates: (templateType?: string) =>
+    api.get('/templates/', { params: templateType ? { template_type: templateType } : {} }),
+  createTemplate: (data: Record<string, unknown>) => api.post('/templates/', data),
+  getTemplate: (id: number) => api.get(`/templates/${id}`),
+  updateTemplate: (id: number, data: Record<string, unknown>) => api.put(`/templates/${id}`, data),
+  deleteTemplate: (id: number) => api.delete(`/templates/${id}`),
+  seedDefaults: () => api.post('/templates/seed-defaults'),
 };
 
 // Results API
@@ -84,7 +104,7 @@ export const resultsAPI = {
   getStatisticalSignificance: (testId: string, alpha: number = 0.05) =>
     api.get(`/results/${testId}/statistical-significance?alpha=${alpha}`),
   getPlatformStats: () => api.get('/results/platform/performance'),
-  getTimeSeriesData: (testId: string) => api.get(`/results/${testId}/time-series-data`),
+  getTimeSeriesData: (testId: string) => api.get<TimeSeriesResponse>(`/results/${testId}/time-series-data`),
 };
 
 // Auth API
@@ -145,6 +165,6 @@ if (import.meta.env.DEV) {
   };
 
   if (typeof window !== 'undefined') {
-    (window as any).debugAPI = debugAPI;
+    (window as typeof window & { debugAPI?: typeof debugAPI }).debugAPI = debugAPI;
   }
 }

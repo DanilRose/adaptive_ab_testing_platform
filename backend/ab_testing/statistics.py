@@ -151,17 +151,25 @@ class SequentialTesting:
         observations: int,
         target_sample_size: int
     ) -> Tuple[bool, str]:
+        target_sample_size = max(1, int(target_sample_size))
         progress = observations / target_sample_size
 
-        # Должны собрать хотя бы 70% данных (было 50%)
-        if progress < 0.7:
+        # До 85% выборки не останавливаемся по бесперспективности,
+        # иначе высок риск преждевременной остановки на шуме.
+        if progress < 0.85:
             return False, "Too early for futility check"
 
-        # Наблюдаемый эффект слишком мал (было 0.3, стало 0.15 - менее строго)
-        if abs(observed_effect) < abs(target_mde) * 0.15:
-            # Дополнительная проверка: если эффект близок к нулю и progress > 85%
-            if progress > 0.85 and abs(observed_effect) < abs(target_mde) * 0.2:
-                return True, f"Observed effect ({observed_effect:.1%}) << target MDE ({target_mde:.1%})"
+        abs_mde = abs(float(target_mde))
+        abs_effect = abs(float(observed_effect))
+
+        # Если пользователь поставил нулевой MDE, фьютили-ти критерий неприменим.
+        if abs_mde <= 1e-12:
+            return False, "Continue experiment"
+
+        # Останавливаем только когда наблюдаемый эффект существенно ниже MDE
+        # на высокой доле собранных данных.
+        if abs_effect < abs_mde * 0.25:
+            return True, f"Observed effect ({observed_effect:.1%}) << target MDE ({target_mde:.1%})"
 
         return False, "Continue experiment"
     

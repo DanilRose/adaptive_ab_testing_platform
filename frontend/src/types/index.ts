@@ -51,6 +51,12 @@ export interface LoginCredentials {
   password: string;
 }
 
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
+
 export interface GANConfigOverrides {
   [key: string]: string | number | boolean | number[];
 }
@@ -66,6 +72,82 @@ export interface GANTrainingPayload {
 export interface SyntheticGenerationPayload {
   num_users: number;
   evaluation_metrics: boolean;
-  filters?: Record<string, any>;
+  filters?: Record<string, JsonValue>;
   dataset_name?: string;
+}
+
+export interface ABTestCreatePayload {
+  test_name: string;
+  variants: string[];
+  primary_metric: string;
+  metric_type: 'binary' | 'continuous' | 'ratio';
+  description?: string;
+  sample_size?: number;
+  confidence_level?: number;
+  power?: number;
+  min_effect_size?: number;
+  dataset_id?: number;
+  simulation_duration_minutes?: number;
+  traffic_split_type?: 'fixed' | 'adaptive';
+  variant_effects?: Record<string, Record<string, number>> | null;
+}
+
+export interface StartSimulationPayload {
+  dataset_id?: number;
+  user_count?: number;
+  strategy?: 'fixed' | 'adaptive';
+  simulation_minutes?: number;
+  variant_effects?: Record<string, Record<string, number>> | null;
+}
+
+export interface UserAssignmentPayload {
+  user_id: string;
+  user_context?: Record<string, JsonValue>;
+}
+
+export interface TimeSeriesPoint {
+  users_processed: number;
+  variant: string;
+  cumulative_metric: number;
+  mean_metric: number;
+  sample_size: number;
+  p_value: number | null;
+  confidence_interval_lower: number | null;
+  confidence_interval_upper: number | null;
+}
+
+export interface TimeSeriesResponse {
+  test_id: string;
+  variants: string[];
+  data: TimeSeriesPoint[];
+  total_snapshots: number;
+  snapshots_per_variant: number;
+  completion_percentage: number;
+  stopped_early: boolean;
+  early_stop_reason: string | null;
+  current_sequential_look: number;
+  max_sequential_looks: number;
+  srm_check_passed: number | null;
+  srm_p_value: number | null;
+  traffic_split: {
+    variant_counts: Record<string, number>;
+    variant_percentages: Record<string, number>;
+  };
+  winner: string | null;
+  winner_uplift_percent: number;
+  winner_confidence: 'low' | 'medium' | 'high';
+  power_over_time: Array<Record<string, number>>;
+  uplift_over_time: Array<Record<string, number>>;
+}
+
+export interface GeneratedHistoryItem {
+  id: number;
+  data_type: 'real' | 'synthetic';
+  sample_count: number;
+  file_path: string | null;
+  storage: string;
+  dataset_name?: string;
+  preview_json?: Array<Record<string, JsonValue>>;
+  extra_metadata?: Record<string, JsonValue>;
+  created_at?: string | null;
 }

@@ -53,7 +53,6 @@ export const Dashboard: React.FC = () => {
     loadDashboardData();
     loadDatasets();
     
-    // Обновляем дашборд каждые 3 секунды для отслеживания статуса симуляции
     pollingRef.current = window.setInterval(() => {
       loadDashboardData();
     }, 3000);
@@ -70,7 +69,7 @@ export const Dashboard: React.FC = () => {
       const response = await abTestAPI.getAllTests();
       setTestsData(response.data);
     } catch (error) {
-      console.error('Error loading dashboard:', error);
+      console.error('Ошибка загрузки данных дашборда:', error);
       message.error('Ошибка загрузки данных дашборда');
     } finally {
       setLoading(false);
@@ -83,7 +82,7 @@ export const Dashboard: React.FC = () => {
       const syntheticDatasets = response.data.items.filter((d: any) => d.data_type === 'synthetic');
       setDatasets(syntheticDatasets);
     } catch (error) {
-      console.error('Error loading datasets:', error);
+      console.error('Ошибка загрузки датасетов:', error);
     }
   };
 
@@ -94,7 +93,7 @@ export const Dashboard: React.FC = () => {
         content: (
           <div>
             <p>Для запуска симуляции необходимо сначала сгенерировать синтетические данные.</p>
-            <p>Перейдите в раздел "GAN Manager" и:</p>
+            <p>Перейдите в раздел "Управление GAN" и:</p>
             <ol>
               <li>Сгенерируйте реальные данные</li>
               <li>Обучите GAN модель</li>
@@ -119,7 +118,7 @@ export const Dashboard: React.FC = () => {
         loadDashboardData();
       }, 3000);
     } catch (error: any) {
-      console.error('❌ Simulation error:', error);
+      console.error('❌ Ошибка симуляции:', error);
       const errorMsg = error.response?.data?.detail || error.message || 'Неизвестная ошибка';
       message.error(`Ошибка запуска симуляции: ${errorMsg}`);
     } finally {
@@ -231,10 +230,8 @@ export const Dashboard: React.FC = () => {
     const isSimulating = simulationLoading === test.test_id;
     const isPaused = test.status === 'paused';
 
-    // Определяем кнопки для каждого типа
     const getActions = () => {
       if (isPaused) {
-        // Тест на паузе - показываем кнопку Продолжить
         return [
           <Button
             type="primary"
@@ -466,7 +463,7 @@ export const Dashboard: React.FC = () => {
         <Card style={{ marginBottom: '16px', borderColor: '#ffd591' }}>
           <div style={{ padding: '12px', background: '#fff7e6', borderRadius: '4px' }}>
             <Typography.Text type="warning">
-              ⚠️ <strong>Внимание:</strong> Для запуска симуляции необходимо создать синтетические данные в разделе "GAN Manager"
+              ⚠️ <strong>Внимание:</strong> Для запуска симуляции необходимо создать синтетические данные в разделе "Управление GAN"
             </Typography.Text>
           </div>
         </Card>

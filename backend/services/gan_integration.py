@@ -179,12 +179,12 @@ class GANService:
         return False
     
     def resume_training(self) -> bool:
-        """
-        ПРИМЕЧАНИЕ: Это демонстрационная функция. 
-
-        """
+        # Полноценного восстановления фонового training-loop из текущей архитектуры нет:
+        # обучение запускается отдельной background task через API.
+        # Но корректно снимаем флаг остановки и возвращаем статус, чтобы следующий
+        # запуск обучения продолжался штатно без ложного состояния "paused".
         if self.current_status == "training_paused":
-            self.current_status = "training"  
+            self.current_status = "checkpoint_loaded" if self.is_trained else "checkpoint_not_loaded"
             self._stop_training = False
             return True
         return False
@@ -204,18 +204,61 @@ class GANService:
         try:
             if self.gan_model is None or not self.is_trained:
                 return None
-            
+
             previous_status = self.current_status
-            synthetic_data = self.gan_model.generate(num_samples)
-            if filters:
-                generator = RealisticDataGenerator()
-                synthetic_data = generator.filter_dataframe(synthetic_data, filters)
+            generator = RealisticDataGenerator()
+            normalized_filters = generator._normalize_filters(filters)
+
+            if not normalized_filters:
+                synthetic_data = self.gan_model.generate(num_samples)
+            else:
+                # Гарантируем, что num_samples — это итоговый размер ПОСЛЕ фильтрации.
+                chunks = []
+                accepted = 0
+                attempts = 0
+                max_attempts = 30
+
+                while accepted < num_samples and attempts < max_attempts:
+                    remaining = num_samples - accepted
+                    # Генерируем с запасом, чтобы быстрее добрать после фильтрации.
+                    batch_size = max(remaining * 4, 2000)
+                    batch = self.gan_model.generate(batch_size)
+                    filtered_batch = generator.filter_dataframe(batch, normalized_filters)
+
+                    if not filtered_batch.empty:
+                        chunks.append(filtered_batch)
+                        accepted += len(filtered_batch)
+
+                    attempts += 1
+
+                if chunks:
+                    synthetic_data = pd.concat(chunks, ignore_index=True)
+                else:
+                    synthetic_data = pd.DataFrame()
+
+                # Фолбэк: если GAN не добрал нужный объём по фильтрам, добираем через realistic generator.
+                if len(synthetic_data) < num_samples:
+                    remaining = num_samples - len(synthetic_data)
+                    fallback_df = generator.generate_dataset(remaining, filters=normalized_filters)
+                    synthetic_data = pd.concat([synthetic_data, fallback_df], ignore_index=True)
+
+                synthetic_data = synthetic_data.head(num_samples)
+
+            # Гарантируем обязательные целевые метрики для A/B тестов даже после GAN-постпроцессинга.
+            required_metrics = ["conversion", "revenue", "click", "ctr"]
+            if any(col not in synthetic_data.columns for col in required_metrics):
+                enrich_generator = RealisticDataGenerator()
+                fallback = enrich_generator.generate_dataset(len(synthetic_data))
+                for metric in required_metrics:
+                    if metric not in synthetic_data.columns:
+                        synthetic_data[metric] = fallback[metric].values
+
             if dataset_name:
                 synthetic_data['dataset_name'] = dataset_name
+
             self.current_status = previous_status
-            
             return synthetic_data
-            
+
         except Exception as e:
             self.current_status = f"error: {str(e)}"
             return None

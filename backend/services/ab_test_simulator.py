@@ -1,4 +1,3 @@
-import time
 import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Any, List
@@ -23,17 +22,18 @@ from backend.ab_testing.statistics import (
 from backend.database.session import SessionLocal, AsyncSessionLocal
 from backend.database import crud
 from backend.database.models import ABTestORM, ABTestTimeSeriesORM
+from backend.microservices.data_gan.service import DatasetPersistenceService
 
 
 @dataclass
 class SimulationConfig:
     """Конфигурация симуляции"""
     test_id: str
-    dataset_id: int  # ОБЯЗАТЕЛЬНО!
+    dataset_id: int  
     user_count: int
-    real_world_duration_days: int = 14  # Эквивалент реального времени
-    simulation_duration_minutes: Optional[int] = None  # Если None, рассчитывается динамически
-    traffic_split_strategy: str = "fixed"  # "fixed" | "adaptive"
+    real_world_duration_days: int = 14  
+    simulation_duration_minutes: Optional[int] = None  
+    traffic_split_strategy: str = "fixed" 
     enable_sequential_testing: bool = True
     enable_srm_check: bool = True
     max_sequential_looks: int = 5
@@ -71,13 +71,10 @@ class GoogleStandardABTestSimulator:
         self.config = config
         self.progress: Optional[SimulationProgress] = None
 
-        # Валидация dataset
         self._validate_dataset()
 
-        # Setup traffic splitter
         self.traffic_splitter = self._setup_traffic_splitter()
 
-        # Setup sequential testing
         if config.enable_sequential_testing:
             self.sequential_tester = SequentialTesting(
                 alpha=0.05,
@@ -86,24 +83,22 @@ class GoogleStandardABTestSimulator:
         else:
             self.sequential_tester = None
 
-        # Setup SRM checker
+
         if config.enable_srm_check:
             self.srm_checker = SRMChecker()
         else:
             self.srm_checker = None
 
-        # Statistical analyzer
+
         self.analyzer = StatisticalAnalyzer(alpha=0.05)
 
-        # Results storage
         self.results_by_variant: Dict[str, List[float]] = {}
         self.session_data: List[Dict[str, Any]] = []
 
-        # Time series storage (для графиков)
         self.time_series_data: List[Dict[str, Any]] = []
-        self.time_series_interval: int = 20  # Сохранять каждые 20 пользователей для плавности
+        self.time_series_interval: int = 20  
         
-        # Переменные для early stopping (сохраняются в БД в конце)
+
         self._early_stop_triggered = False
         self._early_stop_reason: Optional[str] = None
         self._sequential_look_at_stop: int = 0
@@ -174,12 +169,11 @@ class GoogleStandardABTestSimulator:
         with SessionLocal() as db:
             dataset = crud.get_generated_data_by_id(db, self.config.dataset_id)
             
-            metadata = dataset.extra_metadata or {}
-            records = metadata.get("records") or dataset.preview_json or []
-            
+            records = DatasetPersistenceService.load_dataset_records_for_entity(dataset)
+
             if not records:
                 raise ValueError("No records found in synthetic dataset")
-            
+
             return pd.DataFrame(records).head(self.config.user_count)
     
     def _get_test_config(self) -> Dict[str, Any]:
@@ -315,14 +309,29 @@ class GoogleStandardABTestSimulator:
             raw_value = pd.to_numeric(pd.Series([user.get(primary_metric)]), errors="coerce").iloc[0]
             if pd.notna(raw_value):
                 if is_binary_metric:
-                    base_prob = float(raw_value)
-                    if base_prob > 1.0:
-                        base_prob /= 100.0
-                    base_prob = float(np.clip(base_prob, 0.0, 1.0))
-                    prob = float(np.clip(base_prob * variant_multiplier, 0.0, 0.999))
+                    # Для бинарных метрик (0/1) нельзя использовать само значение как вероятность:
+                    # raw_value = 0 → prob = 0 * multiplier = 0 (нет эффекта!)
+                    # raw_value = 1 → prob = 1 * multiplier = 1 (нет вариации!)
+                    # Правильный подход: использовать базовую вероятность из датасета (mean)
+                    # и применить к ней multiplier варианта.
+                    baseline_prob = float(np.clip(mean_val, 0.01, 0.95))
+                    prob = float(np.clip(baseline_prob * variant_multiplier, 0.0, 0.999))
                     return 1.0 if np.random.random() < prob else 0.0
 
-                value = float(raw_value) * variant_multiplier
+                value = float(raw_value)
+
+                # Для revenue избегаем вырожденной массы в нуле,
+                # которая резко снижает чувствительность непрерывного теста.
+                if primary_metric == "revenue" and value <= 0:
+                    value = float(max(1.0, np.random.normal(loc=max(1.0, mean_val * 0.35), scale=max(1.0, std_val * 0.2))))
+
+                value *= variant_multiplier
+
+                # Для непрерывных метрик не ограничиваем сверху историческим max,
+                # чтобы не "съедать" эффект варианта.
+                if primary_metric == "revenue":
+                    return float(max(0.0, value))
+
                 return float(np.clip(value, min_val, max_val if max_val > min_val else value))
 
         if is_binary_metric:
@@ -358,7 +367,6 @@ class GoogleStandardABTestSimulator:
         if user.get('traffic_source') == 'direct':
             base_prob += 0.05
         
-        # Демография
         age = user.get('age', 35)
         income = user.get('income', 0)
         age_factor = max(0, (45 - abs(age - 35)) / 100)
@@ -366,7 +374,6 @@ class GoogleStandardABTestSimulator:
         
         base_probability = min(0.8, base_prob + age_factor + income_factor)
         
-        # Эффект варианта
         variant_effect = self._get_variant_multiplier(variant, 'conversion')
         
         return min(0.95, base_probability * variant_effect)
@@ -383,11 +390,9 @@ class GoogleStandardABTestSimulator:
         if user.get('loyalty_score', 0) > 0.8:
             base_revenue *= 1.2
         
-        # Добавляем шум
         noise = np.random.normal(1.0, 0.2)
         base_revenue = max(10, base_revenue * noise)
         
-        # Эффект варианта
         variant_effect = self._get_variant_multiplier(variant, 'revenue')
         
         return base_revenue * variant_effect
@@ -441,12 +446,17 @@ class GoogleStandardABTestSimulator:
                     t_stat, p_value = stats.ttest_ind(control_data, data)
                     p_value = float(p_value)
 
-                    # Расчет доверительного интервала
-                    mean_diff = mean_metric - np.mean(control_data)
-                    se_diff = np.sqrt(np.std(control_data, ddof=1)**2 / len(control_data) + np.std(data, ddof=1)**2 / len(data))
-                    ci = stats.t.interval(0.95, min(len(control_data), len(data)) - 1, loc=mean_diff, scale=se_diff)
-                    ci_lower = float(ci[0])
-                    ci_upper = float(ci[1])
+                    # ДИ для среднего значения МЕТРИКИ самого варианта (а не для разности с контролем),
+                    # чтобы график "Доверительные интервалы" отображал корректную сущность.
+                    variant_std = float(np.std(data, ddof=1)) if len(data) > 1 else 0.0
+                    variant_se = variant_std / np.sqrt(max(1, len(data)))
+                    if variant_se > 0:
+                        ci = stats.t.interval(0.95, len(data) - 1, loc=mean_metric, scale=variant_se)
+                        ci_lower = float(ci[0])
+                        ci_upper = float(ci[1])
+                    else:
+                        ci_lower = float(mean_metric)
+                        ci_upper = float(mean_metric)
                 except Exception:
                     pass
 
@@ -521,7 +531,7 @@ class GoogleStandardABTestSimulator:
         except Exception as e:
             print(f"⚠️ Warning: Failed to update runtime progress: {e}")
 
-    def _wait_if_paused(self) -> bool:
+    async def _wait_if_paused(self) -> bool:
         """Ожидает, пока тест на паузе. Возвращает False, если тест остановлен/переведен в неподдерживаемый статус."""
         while True:
             with SessionLocal() as db:
@@ -531,7 +541,7 @@ class GoogleStandardABTestSimulator:
 
                 is_paused = test.status == "paused" or test.simulation_status == "paused"
                 if is_paused:
-                    time.sleep(0.5)
+                    await asyncio.sleep(0.5)
                     continue
 
                 if test.status not in ["active", "paused"]:
@@ -651,28 +661,23 @@ class GoogleStandardABTestSimulator:
         print(f"   Time Compression: {self.config.real_world_duration_days * 1440 / self.config.simulation_duration_minutes:.1f}x")
         print(f"   Delay per User: {delay_per_user:.3f} sec")
         
-        # Инициализация хранилища результатов
         for variant in test_config['variants']:
             self.results_by_variant[variant] = []
         
         start_time = datetime.utcnow()
         variant_counts = {v: 0 for v in test_config['variants']}
         
-        # Основной цикл симуляции
         stop_simulation_early = False
         for i, (_, user) in enumerate(synthetic_data.iterrows(), start=1):
             user_id = str(user.get("user_id", i))
             
-            # 0. Проверяем pause/resume в реальном времени
-            if not self._wait_if_paused():
-                print("⛔ Simulation interrupted: test status is no longer active")
+            if not await self._wait_if_paused():
+                print("Simulation interrupted: test status is no longer active")
                 break
 
-            # 1. Assign variant
             variant = self.traffic_splitter.assign_variant(user_id, self.config.test_id)
             variant_counts[variant] += 1
             
-            # 2. Calculate metric value
             primary_metric = test_config['primary_metric']
 
             metric_value = self._generate_metric_value(
@@ -683,19 +688,14 @@ class GoogleStandardABTestSimulator:
                 metric_type=str(test_config.get('metric_type', 'continuous')),
             )
             
-            # 3. Record result
             self.results_by_variant[variant].append(metric_value)
             
-            # 4. Update adaptive splitter (if using Thompson Sampling)
             if self.config.traffic_split_strategy == "adaptive":
-                # Нормализуем metric для Thompson Sampling
                 normalized_reward = min(1.0, metric_value / 1000.0)
                 self.traffic_splitter.update(variant, normalized_reward)
             
-            # 5. Progress logging
             if i % 500 == 0 or i == self.config.user_count:
                 progress_pct = (i / self.config.user_count) * 100
-                # Показываем средние значения метрик по вариантам
                 variant_stats_log = {
                     v: f"n={len(self.results_by_variant[v])}, mean={np.mean(self.results_by_variant[v]):.4f}"
                     for v in test_config['variants']
@@ -704,13 +704,11 @@ class GoogleStandardABTestSimulator:
                 print(f"   Variant Distribution: {variant_counts}")
                 print(f"   Variant Stats: {variant_stats_log}")
 
-            # 5a. Save time series snapshot (каждые N пользователей)
             if i % self.time_series_interval == 0 or i == self.config.user_count:
                 self._save_time_series_snapshot(i)
 
                 self._update_runtime_progress(i)
 
-            # 6. Interim analysis (Sequential Testing + SRM)
             if self._should_check_progress(i):
                 print(f"\n🔍 Performing Interim Analysis at {i} users...")
                 interim_results = self._perform_interim_analysis(i)
@@ -720,30 +718,24 @@ class GoogleStandardABTestSimulator:
                     srm_result=interim_results.get('srm_result'),
                 )
 
-                # Check for early stopping
                 for variant, result in interim_results['variant_results'].items():
                     if result['can_stop_early']:
                         print(f"\n🎯 EARLY STOPPING TRIGGERED!")
                         print(f"   Variant: {variant}")
                         print(f"   Reason: {result['stop_reason']}")
 
-                        # Сохраняем в БД (асинхронно будет сделано в конце)
-                        # Помечаем в памяти для последующего сохранения
                         self._early_stop_triggered = True
                         self._early_stop_reason = result['stop_reason']
                         self._sequential_look_at_stop = interim_results['sequential_look']
 
-                        # Реальная ранняя остановка теста
                         stop_simulation_early = True
                         break
                 if stop_simulation_early:
                     break
             
-            # 7. Delay для симуляции временной шкалы
-            if delay_per_user > 0.001:  # Только если delay значимый
+            if delay_per_user > 0.001: 
                 await asyncio.sleep(delay_per_user)
         
-        # Финальный анализ
         print(f"\n{'='*80}")
         print(f"📊 FINAL ANALYSIS")
         print(f"{'='*80}")
@@ -751,7 +743,6 @@ class GoogleStandardABTestSimulator:
         final_results = self._generate_final_report(test_config, start_time)
         final_results['users_processed'] = sum(len(v) for v in self.results_by_variant.values())
 
-        # Сохранение результатов в БД (асинхронно)
         await self._save_results_to_db(final_results)
 
         return final_results
@@ -765,7 +756,6 @@ class GoogleStandardABTestSimulator:
         control_variant = test_config['variants'][0]
         control_data = np.array(self.results_by_variant[control_variant])
         
-        # Статистика по каждому варианту
         variant_stats = {}
         for variant in test_config['variants']:
             data = np.array(self.results_by_variant[variant])
@@ -776,7 +766,6 @@ class GoogleStandardABTestSimulator:
                 'median': float(np.median(data)) if len(data) > 0 else 0.0,
             }
         
-        # Сравнение с контролем
         comparisons = {}
         for variant in test_config['variants'][1:]:
             treatment_data = np.array(self.results_by_variant[variant])
@@ -787,7 +776,7 @@ class GoogleStandardABTestSimulator:
                     treatment_data,
                     baseline_std=variant_stats[control_variant]['std'],
                     mde_target=test_config['mde_percent'],
-                    metric_type="continuous",
+                    metric_type=str(test_config.get('metric_type', 'continuous')),
                     alpha=0.05
                 )
                 
@@ -798,11 +787,9 @@ class GoogleStandardABTestSimulator:
                     'confidence': full_analysis['confidence']
                 }
         
-        # SRM финальная проверка
         variant_counts = {v: len(self.results_by_variant[v]) for v in test_config['variants']}
         srm_final = self.srm_checker.check_srm_by_variant(variant_counts) if self.srm_checker else None
         
-        # Traffic Split stats
         traffic_stats = self.traffic_splitter.get_assignment_stats()
         
         end_time = datetime.utcnow()
@@ -891,28 +878,24 @@ class GoogleStandardABTestSimulator:
                 target_users = test.sample_size or self.config.user_count or processed_users or 1
                 test.completion_percentage = float(min(100.0, (processed_users / max(1, target_users)) * 100.0))
 
-                # SRM результаты
+
                 if results['srm_check']:
                     test.srm_check_passed = 0 if results['srm_check']['srm_detected'] else 1
                     test.srm_p_value = results['srm_check']['p_value']
 
-                # Sequential testing и early stopping
                 if results['sequential_testing']['enabled']:
                     test.current_sequential_look = results['sequential_testing']['looks_performed']
 
-                    # Сохраняем early stopping информацию
                     if self._early_stop_triggered:
                         test.stopped_early = 1
                         test.early_stop_reason = self._early_stop_reason
 
                 await db.commit()
-                print(f"\n✅ Results saved to database")
+                print(f"\n Results saved to database")
 
-            # Временные ряды уже сохранены в реальном времени во время симуляции
-            print(f"✅ Time series data already saved in real-time: {len(self.time_series_data)} snapshots")
+            print(f" Time series data already saved in real-time: {len(self.time_series_data)} snapshots")
 
 
-# Удобная функция для запуска
 async def run_ab_test_simulation(
     test_id: str,
     dataset_id: int,
@@ -922,21 +905,6 @@ async def run_ab_test_simulation(
     strategy: str = "fixed",
     variant_effects: Optional[Dict[str, Dict[str, float]]] = None
 ) -> Dict[str, Any]:
-    """
-    Запуск A/B теста с синтетическими данными
-    
-    Args:
-        test_id: ID теста
-        dataset_id: ID GAN-датасета (ОБЯЗАТЕЛЬНО!)
-        user_count: Количество пользователей
-        real_world_days: Эквивалент реального времени
-        simulation_minutes: Фактическое время симуляции
-        strategy: "fixed" (рекомендуется) или "adaptive"
-        variant_effects: Эффекты вариантов для симуляции
-    
-    Returns:
-        Полный отчет с результатами
-    """
     config = SimulationConfig(
         test_id=test_id,
         dataset_id=dataset_id,

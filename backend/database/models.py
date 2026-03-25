@@ -93,6 +93,9 @@ class ABTestORM(Base):
     traffic_split_type: Mapped[str] = mapped_column(String(32), nullable=False, default="fixed")
     traffic_split_seed: Mapped[int] = mapped_column(Integer, nullable=False, default=42)
 
+    # Дополнительная конфигурация теста (например, variant_effects для симуляции)
+    extra_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -105,14 +108,12 @@ class ABTestORM(Base):
 
     created_by_user: Mapped[UserORM | None] = relationship("UserORM", back_populates="tests")
     
-    # Связь с датасетом (НОВОЕ)
     dataset: Mapped[GeneratedDataORM | None] = relationship(
         "GeneratedDataORM",
         foreign_keys=[dataset_id],
         back_populates="ab_tests_using_dataset"
     )
     
-    # Старая связь для обратной совместимости
     generated_data: Mapped[list[GeneratedDataORM]] = relationship(
         "GeneratedDataORM",
         back_populates="ab_test",
@@ -156,7 +157,6 @@ class GeneratedDataORM(Base):
         foreign_keys=[ab_test_id]
     )
 
-    # Новая связь: какие тесты используют этот датасет
     ab_tests_using_dataset: Mapped[list[ABTestORM]] = relationship(
         "ABTestORM",
         back_populates="dataset",
@@ -189,19 +189,15 @@ class ABTestTimeSeriesORM(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     test_id: Mapped[str] = mapped_column(String(64), ForeignKey("ab_tests.test_id", ondelete="CASCADE"), nullable=False, index=True)
     
-    # Срез данных (например, по количеству пользователей)
     users_processed: Mapped[int] = mapped_column(Integer, nullable=False)
     
-    # Вариант теста (A, B, C...)
     variant: Mapped[str] = mapped_column(String(32), nullable=False)
     
-    # Метрики на момент среза
-    cumulative_metric: Mapped[float] = mapped_column(Float, nullable=False)  # Накопленная метрика
-    mean_metric: Mapped[float] = mapped_column(Float, nullable=False)  # Среднее значение
-    sample_size: Mapped[int] = mapped_column(Integer, nullable=False)  # Размер выборки
+    cumulative_metric: Mapped[float] = mapped_column(Float, nullable=False) 
+    mean_metric: Mapped[float] = mapped_column(Float, nullable=False)  
+    sample_size: Mapped[int] = mapped_column(Integer, nullable=False)  
     
-    # Статистика
-    p_value: Mapped[float | None] = mapped_column(Float, nullable=True)  # p-value на момент среза
+    p_value: Mapped[float | None] = mapped_column(Float, nullable=True)  
     confidence_interval_lower: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence_interval_upper: Mapped[float | None] = mapped_column(Float, nullable=True)
     
@@ -228,4 +224,33 @@ class CheckpointORM(Base):
 
     __table_args__ = (
         UniqueConstraint("file_path", name="uq_checkpoints_file_path"),
+    )
+
+
+class TemplateORM(Base):
+    """Шаблоны для GAN конфигураций, синтетических данных и A/B тестов."""
+    __tablename__ = "templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    template_type: Mapped[str] = mapped_column(
+        String(32), index=True, nullable=False
+    )  # "gan_config" | "synthetic_data" | "ab_test"
+    config_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default={})
+    tags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_templates_type_name", "template_type", "name"),
     )

@@ -10,7 +10,8 @@ class RealisticDataGenerator:
     def __init__(self, seed=42):
         self.faker = Faker('ru_RU')
         self.random = random.Random(seed)
-        np.random.seed(seed)
+        # Не трогаем глобальный numpy RNG, чтобы не влиять на другие модули.
+        # Это убирает скрытый сайд-эффект, когда генератор "засевает" всю систему.
 
         self.russian_cities = [
             'Москва', 'Санкт-Петербург', 'Новосибирск', 'Екатеринбург', 'Казань',
@@ -161,7 +162,69 @@ class RealisticDataGenerator:
         email_subscribed = np.random.random() < email_prob
         
         push_enabled = device in ['Mobile', 'Tablet'] and np.random.random() < 0.7
-        
+
+        # -----------------------------------------------------------------------
+        # Целевые метрики A/B тестирования
+        # Базовые вероятности конверсии (контроль, вариант A)
+        # -----------------------------------------------------------------------
+
+        # conversion: вероятность нажатия кнопки / совершения целевого действия
+        # Зависит от типа пользователя, лояльности, источника трафика
+        base_conv = 0.05  # базовая конверсия 5%
+        if user_type == 'shopper':
+            base_conv += 0.20
+        elif user_type == 'returning':
+            base_conv += 0.15
+        elif user_type == 'researcher':
+            base_conv += 0.05
+        if previous_purchases > 0:
+            base_conv += 0.10
+        if loyalty_score > 0.7:
+            base_conv += 0.05
+        if traffic_source == 'direct':
+            base_conv += 0.05
+        if traffic_source == 'email':
+            base_conv += 0.08
+        # Возраст и доход
+        base_conv += max(0, (45 - abs(age - 35)) / 200)
+        base_conv += min(0.05, income / 1000000)
+        base_conv = float(np.clip(base_conv, 0.0, 0.95))
+        # Сам факт конверсии — случайная реализация вероятности
+        conversion = 1 if np.random.random() < base_conv else 0
+
+        # revenue: доход на пользователя (ARPU-подобная непрерывная метрика).
+        # Важно: не делаем жёстко 0 для неконвертировавшихся пользователей,
+        # иначе распределение метрики получается чрезмерно разреженным,
+        # что снижает мощность и искажает интерпретацию revenue-тестов.
+        base_revenue = income * 0.012
+        if user_type == 'shopper':
+            base_revenue *= 1.5
+        if previous_purchases > 3:
+            base_revenue *= 1.3
+        if loyalty_score > 0.8:
+            base_revenue *= 1.2
+
+        # Неконвертировавшиеся пользователи тоже могут давать небольшой вклад
+        # (косвенная монетизация, микропокупки, атрибуция).
+        if conversion == 0:
+            base_revenue *= 0.35
+
+        revenue = float(max(20, np.random.normal(base_revenue, max(10.0, base_revenue * 0.3))))
+
+        # click: вероятность клика по любому элементу (шире, чем конверсия)
+        base_click = 0.15
+        if user_type in ('shopper', 'researcher'):
+            base_click += 0.10
+        if pages_per_session > 5:
+            base_click += 0.05
+        base_click = float(np.clip(base_click, 0.0, 0.95))
+        click = 1 if np.random.random() < base_click else 0
+
+        # ctr: clicks / page_views (0..1) — используется для баннерных тестов
+        impressions = max(1, pages_per_session)
+        clicks_raw = np.random.binomial(impressions, base_click)
+        ctr = float(clicks_raw / impressions)
+
         return {
             'age': age,
             'gender': gender,
@@ -183,6 +246,12 @@ class RealisticDataGenerator:
             'hour_of_day': hour_of_day,
             'is_weekend': is_weekend,
             'session_quality': round(session_quality, 2),
+            # Целевые метрики A/B тестирования
+            'conversion': conversion,          # 0/1 бинарная конверсия
+            'revenue': round(revenue, 2),       # доход от пользователя (0 если не конвертировался)
+            'click': click,                     # 0/1 факт клика
+            'ctr': round(ctr, 4),               # click-through rate (0..1)
+            'conversion_probability': round(base_conv, 4),  # базовая вероятность (для анализа)
         }
 
     def _ensure_list(self, value: Any) -> Optional[List[Any]]:
@@ -192,9 +261,105 @@ class RealisticDataGenerator:
             return value
         return [value]
 
+    def _normalize_filter_value(self, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().casefold()
+        return value
+
+    def _normalize_filters(self, filters: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Приводит фильтры к каноническому виду и отбрасывает невалидные значения.
+
+        Это делает шаблоны более устойчивыми к регистру, синонимам и устаревшим значениям.
+        """
+        if not filters:
+            return {}
+
+        normalized: Dict[str, Any] = {}
+        options = self.get_filter_options()
+
+        aliases: Dict[str, Dict[str, str]] = {
+            'devices': {
+                'mobile': 'Mobile',
+                'phone': 'Mobile',
+                'smartphone': 'Mobile',
+                'desktop': 'Desktop',
+                'pc': 'Desktop',
+                'tablet': 'Tablet',
+            },
+            'os': {
+                'ios': 'iOS',
+                'android': 'Android',
+                'windows': 'Windows',
+                'macos': 'macOS',
+                'mac os': 'macOS',
+            },
+            'user_types': {
+                'premium': 'shopper',
+                'buyer': 'shopper',
+                'loyal': 'returning',
+            },
+        }
+
+        normalized_keys = ['cities', 'devices', 'os', 'browsers', 'user_types', 'traffic_sources', 'genders']
+        for key in normalized_keys:
+            raw_values = self._ensure_list(filters.get(key))
+            if not raw_values:
+                continue
+
+            valid_options = options.get(key, [])
+            valid_by_norm = {
+                self._normalize_filter_value(v): v
+                for v in valid_options
+            }
+            key_aliases = aliases.get(key, {})
+
+            normalized_values = []
+            for raw in raw_values:
+                norm_raw = self._normalize_filter_value(raw)
+                if norm_raw is None:
+                    continue
+
+                # 1) Синонимы
+                alias_target = key_aliases.get(norm_raw)
+                if alias_target is not None:
+                    normalized_values.append(alias_target)
+                    continue
+
+                # 2) Канонические опции (без учёта регистра)
+                canonical = valid_by_norm.get(norm_raw)
+                if canonical is not None:
+                    normalized_values.append(canonical)
+
+            if normalized_values:
+                # Сохраняем порядок и убираем дубли
+                normalized[key] = list(dict.fromkeys(normalized_values))
+
+        boolean_fields = ['email_subscribed', 'push_enabled', 'is_weekend']
+        for field in boolean_fields:
+            if field in filters and filters[field] is not None:
+                normalized[field] = bool(filters[field])
+
+        numeric_ranges = filters.get('numeric_ranges') or {}
+        cleaned_ranges: Dict[str, Dict[str, Any]] = {}
+        for key, bounds in numeric_ranges.items():
+            if not isinstance(bounds, dict):
+                continue
+            min_value = bounds.get('min')
+            max_value = bounds.get('max')
+            if min_value is None and max_value is None:
+                continue
+            cleaned_ranges[key] = {'min': min_value, 'max': max_value}
+
+        if cleaned_ranges:
+            normalized['numeric_ranges'] = cleaned_ranges
+
+        return normalized
+
     def _matches_filters(self, user: Dict[str, Any], filters: Optional[Dict[str, Any]]) -> bool:
         if not filters:
             return True
+
+        filters = self._normalize_filters(filters)
 
         field_map = {
             'cities': 'city',
@@ -208,7 +373,15 @@ class RealisticDataGenerator:
 
         for request_key, user_key in field_map.items():
             allowed_values = self._ensure_list(filters.get(request_key))
-            if allowed_values and user.get(user_key) not in allowed_values:
+            if not allowed_values:
+                continue
+
+            normalized_allowed = {
+                self._normalize_filter_value(value)
+                for value in allowed_values
+            }
+            user_value = self._normalize_filter_value(user.get(user_key))
+            if user_value not in normalized_allowed:
                 return False
 
         boolean_fields = ['email_subscribed', 'push_enabled', 'is_weekend']
@@ -237,18 +410,52 @@ class RealisticDataGenerator:
         mask = df.apply(lambda row: self._matches_filters(row.to_dict(), filters), axis=1)
         return df[mask]
 
+    def _estimate_filter_acceptance_rate(
+        self,
+        filters: Dict[str, Any],
+        probe_size: int = 3000,
+    ) -> float:
+        """Оценивает долю пользователей, проходящих фильтры.
+
+        Нужен для адаптивного ограничения числа попыток генерации,
+        чтобы строгие, но валидные шаблоны не падали из-за лимита попыток.
+        """
+        if probe_size <= 0:
+            return 0.0
+
+        accepted = 0
+        for i in range(probe_size):
+            user = self.generate_user(i)
+            if self._matches_filters(user, filters):
+                accepted += 1
+        return accepted / probe_size
+
     def generate_dataset(self, n_samples=50000, filters: Optional[Dict[str, Any]] = None):
         users = []
         attempts = 0
-        max_attempts = n_samples * (20 if filters else 1)
+
+        normalized_filters = self._normalize_filters(filters)
+
+        if normalized_filters:
+            acceptance_rate = self._estimate_filter_acceptance_rate(normalized_filters)
+
+            if acceptance_rate <= 0:
+                raise ValueError("Не удалось сгенерировать выборку с заданными фильтрами. Смягчите параметры.")
+
+            # Адаптивный лимит: учитываем ожидаемую вероятность прохождения фильтров
+            # и добавляем запас против случайных колебаний.
+            expected_attempts = int(np.ceil(n_samples / acceptance_rate))
+            max_attempts = int(max(n_samples * 20, min(expected_attempts * 2, n_samples * 1000)))
+        else:
+            max_attempts = n_samples
 
         while len(users) < n_samples and attempts < max_attempts:
             if attempts % 10000 == 0:
-                print(f"Генерация данных: {len(users)}/{n_samples} (попыток: {attempts})")
+                print(f"Генерация данных: {len(users)}/{n_samples} (попыток: {attempts}, лимит: {max_attempts})")
             user = self.generate_user(attempts)
             attempts += 1
 
-            if filters and not self._matches_filters(user, filters):
+            if normalized_filters and not self._matches_filters(user, normalized_filters):
                 continue
 
             users.append(user)

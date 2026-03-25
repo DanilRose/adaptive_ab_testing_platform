@@ -13,7 +13,7 @@ class Base(DeclarativeBase):
     pass
 
 
-# Синхронный движок (для обратной совместимости)
+
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
@@ -30,7 +30,7 @@ SessionLocal = sessionmaker(
 )
 
 
-# Асинхронный движок
+
 async_engine = create_async_engine(
     ASYNC_DATABASE_URL,
     pool_pre_ping=True,
@@ -50,7 +50,7 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 def get_db():
-    """Синхронная зависимость для обратной совместимости"""
+
     db = SessionLocal()
     try:
         yield db
@@ -59,7 +59,6 @@ def get_db():
 
 
 async def get_async_db():
-    """Асинхронная зависимость для новых endpoints"""
     async with AsyncSessionLocal() as session:
         try:
             yield session

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -87,7 +88,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     except JWTError:
         raise credentials_exception
 
-    user = get_user(token_data.username)
+    user = await run_in_threadpool(get_user, token_data.username)
     if user is None:
         raise credentials_exception
 
