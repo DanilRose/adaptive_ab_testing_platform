@@ -9,6 +9,7 @@ from sqlalchemy import func
 from .core import ABTestManager, AdaptiveABTest, TestConfig, MetricType, TestResult
 from .traffic_splitter import FixedTrafficSplitter, AdaptiveTrafficSplitter, ABVariant
 from .decision_engine import ABDecisionEngine
+from .statistics import StatisticalAnalyzer
 
 @dataclass
 class TestSession:
@@ -605,7 +606,10 @@ class AdaptiveABTestingPlatform:
             results = temp_test.get_results()
 
             if config.metric_type == MetricType.RATIO and config.variants:
-                analyzer = StatisticalAnalyzer(alpha=1.0)
+                alpha = 1.0 - float(config.confidence_level)
+                if not (0.0 < alpha < 1.0):
+                    alpha = 0.05
+                analyzer = StatisticalAnalyzer(alpha=alpha)
                 control_variant = config.variants[0]
                 control_num = np.asarray(ratio_components.get(control_variant, {}).get("numerators", []), dtype=float)
                 control_den = np.asarray(ratio_components.get(control_variant, {}).get("denominators", []), dtype=float)
