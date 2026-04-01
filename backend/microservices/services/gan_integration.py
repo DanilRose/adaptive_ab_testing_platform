@@ -212,24 +212,35 @@ class GANService:
             if not normalized_filters:
                 synthetic_data = self.gan_model.generate(num_samples)
             else:
-                # Гарантируем, что num_samples — это итоговый размер ПОСЛЕ фильтрации.
+                # Гарантируем, что num_samples — это итоговый размер ПОСЛЕ фильтрации,
+                # но не допускаем чрезмерно долгие циклы (иначе frontend ловит timeout).
                 chunks = []
                 accepted = 0
                 attempts = 0
-                max_attempts = 30
+                empty_hits = 0
+                max_attempts = 8
+                max_batch_size = 50000
 
                 while accepted < num_samples and attempts < max_attempts:
                     remaining = num_samples - accepted
-                    # Генерируем с запасом, чтобы быстрее добрать после фильтрации.
-                    batch_size = max(remaining * 4, 2000)
+                    # Генерируем с запасом, но ограничиваем верхнюю границу батча.
+                    batch_size = min(max(remaining * 3, 2000), max_batch_size)
                     batch = self.gan_model.generate(batch_size)
                     filtered_batch = generator.filter_dataframe(batch, normalized_filters)
 
                     if not filtered_batch.empty:
                         chunks.append(filtered_batch)
                         accepted += len(filtered_batch)
+                        empty_hits = 0
+                    else:
+                        empty_hits += 1
 
                     attempts += 1
+
+                    # Если фильтры слишком узкие и несколько батчей подряд пустые —
+                    # переходим к fallback раньше, чтобы не зависать.
+                    if empty_hits >= 3:
+                        break
 
                 if chunks:
                     synthetic_data = pd.concat(chunks, ignore_index=True)

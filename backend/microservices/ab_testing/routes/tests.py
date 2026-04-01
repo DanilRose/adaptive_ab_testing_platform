@@ -44,6 +44,10 @@ class TestCreateRequest(BaseModel):
             "{'latency_ms': {'threshold': 5, 'direction': 'max_increase'}}"
         ),
     )
+    early_stopping_enabled: bool = Field(
+        False,
+        description="Включить раннюю остановку симуляции (sequential success/futility)",
+    )
 
     @validator("variants")
     def validate_variants(cls, v):
@@ -234,7 +238,10 @@ async def create_test(
             analysis_validity=("exploration_only" if request.analysis_mode == "adaptive_bandit" or request.traffic_split_type == "adaptive" else "valid_for_inference"),
             created_by_user_id=current_user.id,
             status="prepared",  # Новый тест создается в статусе "prepared"
-            extra_config={"variant_effects": request.variant_effects} if request.variant_effects else None,
+            extra_config={
+                "variant_effects": request.variant_effects,
+                "early_stopping_enabled": bool(request.early_stopping_enabled),
+            },
             guardrails_config=request.guardrails_config,
         )
 

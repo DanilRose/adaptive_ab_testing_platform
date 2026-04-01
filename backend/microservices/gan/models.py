@@ -445,7 +445,15 @@ class GAN:
             'd_losses': self.d_losses,
             'feature_info': self.feature_info,
             'processed_columns': self.processed_columns,
-            'scalers': self.scalers
+            'scalers': self.scalers,
+            # Явно сохраняем архитектуру, чтобы чекпоинт корректно грузился
+            # даже при смене дефолтного GANConfig в кодовой базе.
+            'model_config': {
+                'use_wgan_gp': bool(self.config.USE_WGAN_GP),
+                'latent_dim': int(self.config.LATENT_DIM),
+                'generator_layers': list(self.config.GENERATOR_LAYERS),
+                'discriminator_layers': list(self.config.DISCRIMINATOR_LAYERS),
+            },
         }, f'gan_checkpoint_epoch_{epoch}.pth')
     
     def _generate_samples(self, epoch, n_samples):
@@ -542,15 +550,70 @@ class GAN:
             synthetic_data = self.generator(z).cpu().numpy()
             return self._postprocess(synthetic_data)
     
+    def _infer_wgan_generator_architecture(self, generator_state_dict):
+        fc1_weight = generator_state_dict.get('fc1.weight')
+        if fc1_weight is None:
+            return None
+
+        latent_dim = int(fc1_weight.shape[1])
+        hidden_dims = [int(fc1_weight.shape[0])]
+
+        i = 0
+        while f'res_blocks.{i}.0.weight' in generator_state_dict:
+            layer_weight = generator_state_dict[f'res_blocks.{i}.0.weight']
+            hidden_dims.append(int(layer_weight.shape[0]))
+            i += 1
+
+        return {
+            'latent_dim': latent_dim,
+            'hidden_dims': hidden_dims,
+        }
+
+    def _infer_wgan_discriminator_architecture(self, discriminator_state_dict):
+        fc1_weight = discriminator_state_dict.get('fc1.weight')
+        if fc1_weight is None:
+            return None
+
+        hidden_dims = [int(fc1_weight.shape[0])]
+
+        i = 0
+        while f'res_blocks.{i}.0.weight' in discriminator_state_dict:
+            layer_weight = discriminator_state_dict[f'res_blocks.{i}.0.weight']
+            hidden_dims.append(int(layer_weight.shape[0]))
+            i += 1
+
+        return {
+            'hidden_dims': hidden_dims,
+        }
+
     def load_checkpoint(self, checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-        
+
         self.feature_info = checkpoint['feature_info']
         self.processed_columns = checkpoint['processed_columns']
         self.scalers = checkpoint.get('scalers', {})
         self.input_dim = len(self.processed_columns)
-        
-        if self.config.USE_WGAN_GP:
+
+        model_config = checkpoint.get('model_config') or {}
+        checkpoint_use_wgan = bool(model_config.get('use_wgan_gp', self.config.USE_WGAN_GP))
+
+        generator_state = checkpoint['generator_state_dict']
+        discriminator_state = checkpoint['discriminator_state_dict']
+
+        if checkpoint_use_wgan:
+            inferred_g = self._infer_wgan_generator_architecture(generator_state)
+            inferred_d = self._infer_wgan_discriminator_architecture(discriminator_state)
+
+            latent_dim = int(model_config.get('latent_dim') or (inferred_g['latent_dim'] if inferred_g else self.config.LATENT_DIM))
+            generator_layers = list(model_config.get('generator_layers') or (inferred_g['hidden_dims'] if inferred_g else self.config.GENERATOR_LAYERS))
+            discriminator_layers = list(model_config.get('discriminator_layers') or (inferred_d['hidden_dims'] if inferred_d else self.config.DISCRIMINATOR_LAYERS))
+
+            # Синхронизируем runtime-конфиг под загружаемый чекпоинт
+            self.config.USE_WGAN_GP = True
+            self.config.LATENT_DIM = latent_dim
+            self.config.GENERATOR_LAYERS = generator_layers
+            self.config.DISCRIMINATOR_LAYERS = discriminator_layers
+
             self.generator = WGAN_GP_Generator(
                 self.config.LATENT_DIM,
                 self.input_dim,
@@ -561,6 +624,15 @@ class GAN:
                 self.config.DISCRIMINATOR_LAYERS
             ).to(self.device)
         else:
+            latent_dim = int(model_config.get('latent_dim', self.config.LATENT_DIM))
+            generator_layers = list(model_config.get('generator_layers', self.config.GENERATOR_LAYERS))
+            discriminator_layers = list(model_config.get('discriminator_layers', self.config.DISCRIMINATOR_LAYERS))
+
+            self.config.USE_WGAN_GP = False
+            self.config.LATENT_DIM = latent_dim
+            self.config.GENERATOR_LAYERS = generator_layers
+            self.config.DISCRIMINATOR_LAYERS = discriminator_layers
+
             self.generator = Generator(
                 self.config.LATENT_DIM,
                 self.input_dim,
@@ -573,17 +645,35 @@ class GAN:
                 self.config.DROPOUT_RATE,
                 self.config.LEAKY_RELU_SLOPE
             ).to(self.device)
-        
+
         self.optimizer_G = optim.Adam(self.generator.parameters(), lr=self.config.LEARNING_RATE, betas=(0.0, 0.9))
         self.optimizer_D = optim.Adam(self.discriminator.parameters(), lr=self.config.LEARNING_RATE, betas=(0.0, 0.9))
         self.criterion = nn.BCELoss()
-        
-        self.generator.load_state_dict(checkpoint['generator_state_dict'])
-        self.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
-        self.optimizer_G.load_state_dict(checkpoint['optimizer_G_state_dict'])
-        self.optimizer_D.load_state_dict(checkpoint['optimizer_D_state_dict'])
-        self.g_losses = checkpoint['g_losses']
-        self.d_losses = checkpoint['d_losses']
-        
-        print(f"Загружена модель из эпохи {checkpoint['epoch']}")
+
+        # strict=False для мягкой обратной совместимости старых чекпоинтов
+        # при минорных изменениях имен/буферов.
+        missing_g, unexpected_g = self.generator.load_state_dict(generator_state, strict=False)
+        missing_d, unexpected_d = self.discriminator.load_state_dict(discriminator_state, strict=False)
+
+        try:
+            self.optimizer_G.load_state_dict(checkpoint['optimizer_G_state_dict'])
+            self.optimizer_D.load_state_dict(checkpoint['optimizer_D_state_dict'])
+        except Exception as opt_error:
+            print(f"⚠️ Optimizer state load skipped: {opt_error}")
+
+        self.g_losses = checkpoint.get('g_losses', [])
+        self.d_losses = checkpoint.get('d_losses', [])
+
+        if missing_g or unexpected_g or missing_d or unexpected_d:
+            print(
+                "⚠️ Checkpoint loaded with non-strict mode. "
+                f"Generator missing={len(missing_g)}, unexpected={len(unexpected_g)}; "
+                f"Discriminator missing={len(missing_d)}, unexpected={len(unexpected_d)}"
+            )
+
+        print(
+            f"Загружена модель из эпохи {checkpoint.get('epoch')} "
+            f"(WGAN-GP={self.config.USE_WGAN_GP}, latent_dim={self.config.LATENT_DIM}, "
+            f"G_layers={self.config.GENERATOR_LAYERS}, D_layers={self.config.DISCRIMINATOR_LAYERS})"
+        )
         return True

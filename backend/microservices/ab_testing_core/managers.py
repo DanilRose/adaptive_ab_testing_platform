@@ -540,6 +540,13 @@ class AdaptiveABTestingPlatform:
             sessions = db.query(TestSessionORM).filter(TestSessionORM.test_id == test_id).all()
 
             session_metrics: Dict[str, List[float]] = {}
+            ratio_components: Dict[str, Dict[str, List[float]]] = {
+                v: {"numerators": [], "denominators": []} for v in config.variants
+            }
+
+            ratio_num_key = f"{config.primary_metric}_numerator"
+            ratio_den_key = f"{config.primary_metric}_denominator"
+
             for session in sessions:
                 metrics = dict(session.metrics or {})
                 for metric_name, raw_value in metrics.items():
@@ -549,14 +556,82 @@ class AdaptiveABTestingPlatform:
                         continue
                     session_metrics.setdefault(metric_name, []).append(val)
 
-                if session.variant in config.variants and config.primary_metric in metrics:
+                if session.variant not in config.variants:
+                    continue
+
+                variant_name = str(session.variant)
+
+                if config.metric_type == MetricType.RATIO:
+                    # Предпочитаем явную модель ratio: numerator/denominator per user.
+                    # Поддерживаем фолбэк на legacy scalar ratio в primary_metric.
+                    num_raw = metrics.get(ratio_num_key)
+                    den_raw = metrics.get(ratio_den_key)
+
+                    ratio_value: Optional[float] = None
+
                     try:
-                        temp_test.record_observation(str(session.variant), float(metrics[config.primary_metric]))
+                        if num_raw is not None and den_raw is not None:
+                            num = float(num_raw)
+                            den = float(den_raw)
+                            if np.isfinite(num) and np.isfinite(den) and den > 0:
+                                ratio_components[variant_name]["numerators"].append(num)
+                                ratio_components[variant_name]["denominators"].append(den)
+                                ratio_value = num / den
                     except Exception:
-                        pass
+                        ratio_value = None
+
+                    if ratio_value is None and config.primary_metric in metrics:
+                        try:
+                            legacy_ratio = float(metrics[config.primary_metric])
+                            if np.isfinite(legacy_ratio):
+                                ratio_components[variant_name]["numerators"].append(legacy_ratio)
+                                ratio_components[variant_name]["denominators"].append(1.0)
+                                ratio_value = legacy_ratio
+                        except Exception:
+                            ratio_value = None
+
+                    if ratio_value is not None:
+                        try:
+                            temp_test.record_observation(variant_name, float(ratio_value))
+                        except Exception:
+                            pass
+                else:
+                    if config.primary_metric in metrics:
+                        try:
+                            temp_test.record_observation(variant_name, float(metrics[config.primary_metric]))
+                        except Exception:
+                            pass
 
             results = temp_test.get_results()
-            p_values = temp_test.calculate_statistical_significance()
+
+            if config.metric_type == MetricType.RATIO and config.variants:
+                analyzer = StatisticalAnalyzer(alpha=1.0)
+                control_variant = config.variants[0]
+                control_num = np.asarray(ratio_components.get(control_variant, {}).get("numerators", []), dtype=float)
+                control_den = np.asarray(ratio_components.get(control_variant, {}).get("denominators", []), dtype=float)
+
+                p_values = {}
+                for variant in config.variants[1:]:
+                    treat_num = np.asarray(ratio_components.get(variant, {}).get("numerators", []), dtype=float)
+                    treat_den = np.asarray(ratio_components.get(variant, {}).get("denominators", []), dtype=float)
+
+                    if len(control_num) < 10 or len(treat_num) < 10:
+                        p_values[variant] = 1.0
+                        continue
+
+                    try:
+                        ratio_result = analyzer.analyze_ratio_metric(
+                            control_numerators=control_num,
+                            control_denominators=control_den,
+                            treatment_numerators=treat_num,
+                            treatment_denominators=treat_den,
+                            num_comparisons=1,
+                        )
+                        p_values[variant] = float(ratio_result.p_value)
+                    except Exception:
+                        p_values[variant] = 1.0
+            else:
+                p_values = temp_test.calculate_statistical_significance()
 
         corrected_p = ABDecisionEngine.holm_bonferroni_correction(p_values)
 
@@ -770,16 +845,19 @@ class AdaptiveABTestingPlatform:
             control_stat = results[control]
             control_std = max(1e-6, float(control_stat.std))
             powers: List[float] = []
+            analyzer = StatisticalAnalyzer(alpha=alpha)
             for variant, stat in results.items():
                 if variant == control:
                     continue
                 effect = float(stat.mean) - float(control_stat.mean)
                 n = max(1, min(int(control_stat.sample_size), int(stat.sample_size)))
-                effect_size = effect / control_std
-                z_alpha = 1.96
-                ncp = effect_size * np.sqrt(n / 2.0)
-                pwr = float(1.0 - 0.5 * (1.0 + np.math.erf((z_alpha - ncp) / np.sqrt(2.0))))
-                powers.append(max(0.0, min(1.0, pwr)))
+                pwr = analyzer.calculate_power(
+                    observed_effect=float(effect),
+                    sample_size_per_variant=int(n),
+                    baseline_std=float(control_std),
+                    alpha=float(alpha),
+                )
+                powers.append(max(0.0, min(1.0, float(pwr))))
             if powers:
                 min_power = float(min(powers))
                 power_pass = min_power >= power_threshold

@@ -45,6 +45,7 @@ interface TimeSeriesResponse {
   completion_percentage: number;
   stopped_early: boolean;
   early_stop_reason: string | null;
+  early_stopping_enabled?: boolean;
   current_sequential_look: number;
   max_sequential_looks: number;
   srm_check_passed: number | null;
@@ -124,11 +125,11 @@ const CHART_DESCRIPTIONS: Record<string, { title: string; description: string; w
     impact: 'Критически важен для оценки надёжности эксперимента. Позволяет понять, является ли наблюдаемый эффект случайным или реальным.',
   },
   pvalue: {
-    title: 'p-значение (raw, мониторинговое)',
+    title: 'p-значение (сырое, мониторинговое)',
     description: 'График изменения сырого (некорректированного) p-значения во времени. Используется для мониторинга динамики, но не как основной критерий решения при множественных сравнениях.',
-    whatItShows: 'На оси X — количество пользователей. На оси Y — raw p-значение от 0 до 1. Красная пунктирная линия — порог 0.05. Линии вариантов (B, C...) показывают raw p-value сравнения с контрольным вариантом A.',
-    howToRead: 'Если raw p-value опускается ниже 0.05, это сигнал для внимания, но итоговое решение нужно принимать по скорректированным p-value (Holm-Bonferroni), особенно при 3+ вариантах.',
-    impact: 'Служит мониторингом хода теста. Для финального решения используйте скорректированные p-value (Holm), чтобы снизить риск ложноположительных выводов.',
+    whatItShows: 'На оси X — количество пользователей. На оси Y — сырое p-значение от 0 до 1. Красная пунктирная линия — порог 0.05. Линии вариантов (B, C...) показывают сырые p-значения сравнения с контрольным вариантом A.',
+    howToRead: 'Если сырое p-значение опускается ниже 0.05, это сигнал для внимания, но итоговое решение нужно принимать по скорректированным p-значениям (метод Холма—Бонферрони), особенно при 3+ вариантах.',
+    impact: 'Служит мониторингом хода теста. Для финального решения используйте скорректированные p-значения (метод Холма), чтобы снизить риск ложноположительных выводов.',
   },
   uplift: {
     title: 'Прирост метрики относительно контроля',
@@ -481,7 +482,7 @@ export const ResultsPage: React.FC = () => {
     return (
       <>
         {renderChartDescription('pvalue')}
-        <Card title="p-значение (raw, мониторинговое)" size="small" style={{ marginBottom: 16 }}>
+        <Card title="p-значение (сырое, мониторинговое)" size="small" style={{ marginBottom: 16 }}>
           <ResponsiveContainer width="100%" height={380}>
             <LineChart data={pValueData}>
               <CartesianGrid strokeDasharray="3 3" />
@@ -721,7 +722,7 @@ export const ResultsPage: React.FC = () => {
         },
       },
       {
-        title: 'p-value (Holm, corrected)',
+        title: 'p-значение (метод Холма, скорректированное)',
         dataIndex: 'p_value_corrected',
         key: 'p_value_corrected',
         render: (v: string, record: any) => {
@@ -730,7 +731,7 @@ export const ResultsPage: React.FC = () => {
         },
       },
       {
-        title: 'p-value (raw)',
+        title: 'p-значение (сырое)',
         dataIndex: 'p_value_raw',
         key: 'p_value_raw',
         render: (v: string, record: any) => {
@@ -744,9 +745,9 @@ export const ResultsPage: React.FC = () => {
         render: (_: any, record: any) => {
           if (record.is_control) return <Tag color="default">Контроль</Tag>;
           return record.significant ? (
-            <Tag icon={<CheckCircleOutlined />} color="success">Значимо (corrected p &lt; 0.05)</Tag>
+            <Tag icon={<CheckCircleOutlined />} color="success">Значимо (скорректированное p &lt; 0.05)</Tag>
           ) : (
-            <Tag icon={<WarningOutlined />} color="warning">Незначимо (corrected p ≥ 0.05)</Tag>
+            <Tag icon={<WarningOutlined />} color="warning">Незначимо (скорректированное p ≥ 0.05)</Tag>
           );
         },
       },
@@ -772,8 +773,8 @@ export const ResultsPage: React.FC = () => {
               <Text style={{ fontSize: 12 }}>
                 <strong>Средняя метрика</strong> — среднее значение на пользователя для каждого варианта.
                 <strong> Прирост</strong> — процентный прирост относительно контроля (A).
-                <strong> corrected p-value (Holm) &lt; 0.05</strong> — основной критерий статистической значимости.
-                <strong> raw p-value</strong> — мониторинговый сигнал; в multi-variant сценариях не используется как финальный критерий решения.
+                <strong> скорректированное p-значение (метод Холма) &lt; 0.05</strong> — основной критерий статистической значимости.
+                <strong> сырое p-значение</strong> — мониторинговый сигнал; в многовариантных сценариях не используется как финальный критерий решения.
               </Text>
             </div>
           }
@@ -897,7 +898,7 @@ export const ResultsPage: React.FC = () => {
               type="warning"
               showIcon
               message="Режим adaptive_bandit"
-              description="Результаты используются как exploration-only. Для финального causal-решения требуется fixed_experiment."
+              description="Результаты используются только для исследования. Для финального причинно-следственного решения требуется fixed_experiment."
             />
           )}
 
@@ -907,7 +908,7 @@ export const ResultsPage: React.FC = () => {
               type="error"
               showIcon
               message={`Статус валидности: ${timeSeriesData.analysis_validity}`}
-              description="Автоматическая валидация пометила результаты как невалидные для итогового inference."
+              description="Автоматическая валидация пометила результаты как невалидные для итогового статистического вывода."
             />
           )}
 
@@ -988,13 +989,22 @@ export const ResultsPage: React.FC = () => {
             </Col>
             <Col span={8}>
               <Card size="small" title="🔄 Последовательные проверки">
-                <Progress
-                  percent={Math.round((timeSeriesData.current_sequential_look / Math.max(1, timeSeriesData.max_sequential_looks)) * 100)}
-                  format={() => `${timeSeriesData.current_sequential_look} / ${timeSeriesData.max_sequential_looks}`}
-                />
-                <Text type="secondary" style={{ fontSize: 11, marginTop: 4, display: 'block' }}>
-                  Промежуточные проверки позволяют остановить тест досрочно при достижении значимости
-                </Text>
+                <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                  <Tag color={timeSeriesData.early_stopping_enabled ? 'green' : 'default'}>
+                    Ранняя остановка: {timeSeriesData.early_stopping_enabled ? 'включена' : 'выключена'}
+                  </Tag>
+
+                  <Progress
+                    percent={Math.round((timeSeriesData.current_sequential_look / Math.max(1, timeSeriesData.max_sequential_looks)) * 100)}
+                    format={() => `${timeSeriesData.current_sequential_look} / ${timeSeriesData.max_sequential_looks}`}
+                  />
+
+                  <Text type="secondary" style={{ fontSize: 11, marginTop: 4, display: 'block' }}>
+                    {timeSeriesData.early_stopping_enabled
+                      ? 'Промежуточные проверки могут остановить тест досрочно при достижении критериев.'
+                      : 'Промежуточные проверки выполняются для мониторинга; досрочная остановка отключена.'}
+                  </Text>
+                </Space>
               </Card>
             </Col>
             <Col span={8}>
@@ -1027,7 +1037,7 @@ export const ResultsPage: React.FC = () => {
 
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             <Col span={24}>
-              <Card size="small" title="🚦 Quality Gate (валидность результата)">
+              <Card size="small" title="🚦 Контроль качества (валидность результата)">
                 {timeSeriesData.quality_gate ? (
                   <>
                     <Space style={{ marginBottom: 12 }} wrap>
@@ -1085,7 +1095,7 @@ export const ResultsPage: React.FC = () => {
                     />
                   </>
                 ) : (
-                  <Text type="secondary">Quality gate ещё не рассчитан</Text>
+                  <Text type="secondary">Контроль качества ещё не рассчитан</Text>
                 )}
               </Card>
             </Col>
@@ -1096,7 +1106,7 @@ export const ResultsPage: React.FC = () => {
                   {timeSeriesData.analysis_mode || 'fixed_experiment'}
                 </Tag>
                 <div style={{ marginTop: 8 }}>
-                  <Text>Валидность inference: </Text>
+                  <Text>Валидность статистического вывода: </Text>
                   <Tag color={timeSeriesData.analysis_validity === 'valid_for_inference' ? 'success' : 'error'}>
                     {timeSeriesData.analysis_validity || 'unknown'}
                   </Tag>
@@ -1104,7 +1114,7 @@ export const ResultsPage: React.FC = () => {
               </Card>
             </Col>
             <Col span={12}>
-              <Card size="small" title="📉 Скорректированные p-value (Holm)">
+              <Card size="small" title="📉 Скорректированные p-значения (метод Холма)">
                 {Object.keys(timeSeriesData.p_values_corrected_latest || {}).length === 0 ? (
                   <Text type="secondary">Нет данных</Text>
                 ) : (
@@ -1135,7 +1145,7 @@ export const ResultsPage: React.FC = () => {
                   <Option value="cumulative">📈 Накопленная метрика</Option>
                   <Option value="mean">📊 Средняя метрика</Option>
                   <Option value="ci">🎯 Доверительные интервалы (ДИ)</Option>
-                  <Option value="pvalue">📉 p-значение (raw, мониторинг)</Option>
+                  <Option value="pvalue">📉 p-значение (сырое, мониторинг)</Option>
                   <Option value="uplift">🚀 Прирост относительно контроля</Option>
                   <Option value="power">⚡ Статистическая мощность</Option>
                   <Option value="traffic">🛣️ Распределение трафика</Option>

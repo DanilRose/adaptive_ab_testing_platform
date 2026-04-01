@@ -14,6 +14,7 @@ import {
   Typography,
   Tooltip,
   Alert,
+  Switch,
 } from 'antd';
 import { FileTextOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { abTestAPI, dataAPI, templatesAPI } from '../../utils/api';
@@ -111,6 +112,7 @@ export const TestCreator: React.FC = () => {
       sampleSize: pick<number>('sampleSize', 'sample_size') ?? undefined,
       analysisMode: resolvedAnalysisMode,
       guardrailsConfigJson: guardrailsConfig ? JSON.stringify(guardrailsConfig, null, 2) : undefined,
+      earlyStoppingEnabled: pick<boolean>('earlyStoppingEnabled', 'early_stopping_enabled') ?? false,
     });
 
     setAnalysisMode(resolvedAnalysisMode);
@@ -206,6 +208,7 @@ export const TestCreator: React.FC = () => {
         variant_effects: appliedVariantEffects,
         analysis_mode: resolvedAnalysisMode,
         guardrails_config: guardrailsConfig,
+        early_stopping_enabled: Boolean(values.earlyStoppingEnabled),
       };
 
       const response = await abTestAPI.createTest(testData);
@@ -262,6 +265,7 @@ export const TestCreator: React.FC = () => {
           trafficSplitType: 'fixed',
           simulationDurationMinutes: 20,
           analysisMode: 'fixed_experiment',
+          earlyStoppingEnabled: false,
         }}
       >
         <Form.Item
@@ -396,11 +400,11 @@ export const TestCreator: React.FC = () => {
         <Form.Item
           name="analysisMode"
           label="Режим анализа"
-          tooltip="fixed_experiment — валидный causal inference; adaptive_bandit — исследовательский режим"
+          tooltip="fixed_experiment — валидный причинно-следственный вывод; adaptive_bandit — исследовательский режим"
         >
           <Select onChange={(v) => setAnalysisMode(v)}>
-            <Option value="fixed_experiment">fixed_experiment — продуктовый A/B inference</Option>
-            <Option value="adaptive_bandit">adaptive_bandit — exploration only</Option>
+            <Option value="fixed_experiment">fixed_experiment — продуктовый режим с валидными выводами</Option>
+            <Option value="adaptive_bandit">adaptive_bandit — только исследование (без финальных выводов)</Option>
           </Select>
         </Form.Item>
 
@@ -409,14 +413,23 @@ export const TestCreator: React.FC = () => {
             type="warning"
             showIcon
             style={{ marginBottom: 16 }}
-            message="Adaptive/Bandit режим"
-            description="Классические p-value/доверительные интервалы в этом режиме не являются валидными для финального causal-решения. Используйте fixed_experiment для финальной валидации гипотезы."
+            message="Адаптивный/бандитный режим"
+            description="Классические p-значения и доверительные интервалы в этом режиме не являются валидными для финального причинно-следственного решения. Используйте fixed_experiment для финальной валидации гипотезы."
           />
         )}
 
         <Form.Item
+          name="earlyStoppingEnabled"
+          label="Ранняя остановка (последовательный анализ)"
+          tooltip="Если включено, симуляция может завершиться раньше по критерию успеха/бесперспективности при достаточном объёме данных"
+          valuePropName="checked"
+        >
+          <Switch />
+        </Form.Item>
+
+        <Form.Item
           name="guardrailsConfigJson"
-          label="Guardrails конфиг (JSON, опционально)"
+          label="Конфигурация защитных ограничений (JSON, опционально)"
           tooltip={'Пример: {"latency_ms": {"threshold": 5, "direction": "max_increase"}}'}
         >
           <Input.TextArea

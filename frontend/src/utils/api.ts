@@ -20,6 +20,7 @@ const clearAuthStorage = (): void => {
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -75,7 +76,8 @@ export const dataAPI = {
   stopGANTraining: () => api.post('/data/stop-gan-training'),
   resumeGANTraining: () => api.post('/data/resume-gan-training'),
   resetGANTraining: () => api.post('/data/reset-gan-training'),
-  generateSynthetic: (data: SyntheticGenerationPayload) => api.post('/data/generate-synthetic', data),
+  generateSynthetic: (data: SyntheticGenerationPayload) =>
+    api.post('/data/generate-synthetic', data, { timeout: 120000 }),
   getGANStatus: () => api.get('/data/gan-status'),
   getGANCheckpoints: () => api.get('/data/gan-checkpoints'),
   deleteGANCheckpoint: (checkpointId: number) => api.delete(`/data/gan-checkpoints/${checkpointId}`),
@@ -115,12 +117,13 @@ export const authAPI = {
     payload.append('password', credentials.password);
 
     return api.post('/auth/login', payload, {
+      timeout: 30000,
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
     });
   },
-  me: () => api.get('/auth/me'),
+  me: () => api.get('/auth/me', { timeout: 30000 }),
   logout: () => api.post('/auth/logout'),
 };
 

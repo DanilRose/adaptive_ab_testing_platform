@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional
+import multiprocessing
 
 from fastapi import BackgroundTasks
 
@@ -161,21 +162,25 @@ class ABTestLifecycleService:
         simulation_minutes = int(prepared["simulation_minutes"])
         variant_effects = prepared.get("variant_effects")
 
-        background_tasks.add_task(
-            ABTestLifecycleService.run_simulation_task,
-            test_id=test_id,
-            dataset_id=dataset_id,
-            user_count=user_count,
-            real_world_days=test.real_world_duration_days or 14,
-            simulation_minutes=simulation_minutes,
-            strategy=strategy,
-            variant_effects=variant_effects,
-            on_success=lambda: (
-                platform.refresh_test_from_database(test_id),
-                platform.force_update_test_statistics(test_id),
-            ),
-            on_failure=lambda: None,
+        # Отдельный process вместо thread: изоляция CPU/GIL и отсутствие блокировки API.
+        simulation_process = multiprocessing.Process(
+            target=ABTestLifecycleService.run_simulation_task,
+            kwargs={
+                "test_id": test_id,
+                "dataset_id": dataset_id,
+                "user_count": user_count,
+                "real_world_days": test.real_world_duration_days or 14,
+                "simulation_minutes": simulation_minutes,
+                "strategy": strategy,
+                "variant_effects": variant_effects,
+                # callback'и не передаём между процессами (pickle/состояние процесса).
+                "on_success": None,
+                "on_failure": None,
+            },
+            name=f"ab-sim-{test_id}",
+            daemon=True,
         )
+        simulation_process.start()
 
         return {
             "test_id": test_id,

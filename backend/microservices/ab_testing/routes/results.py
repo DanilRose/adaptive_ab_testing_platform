@@ -6,13 +6,14 @@ from typing import Dict, List, Optional, Any
 import numpy as np
 import scipy.stats as stats
 from datetime import datetime
+import math
 
 from backend.microservices.ab_testing.service import ABPlatformProvider
 from backend.microservices.auth_core.models import User
 from backend.microservices.auth_core.service import get_current_user
 from backend.microservices.database.session import SessionLocal
 from backend.microservices.database import crud
-from backend.microservices.database.models import ABTestORM
+from backend.microservices.database.models import ABTestORM, TestSessionORM
 from backend.microservices.ab_testing_core.statistics import StatisticalAnalyzer
 from backend.microservices.data_gan.service import DatasetPersistenceService
 from backend.microservices.ab_testing_core.decision_engine import ABDecisionEngine
@@ -62,22 +63,36 @@ async def get_detailed_results(test_id: str, current_user: User = Depends(get_cu
 @router.get("/{test_id}/statistical-significance", summary="Статистическая значимость")
 async def get_statistical_significance(test_id: str, alpha: float = 0.05, current_user: User = Depends(get_current_user)):
     try:
-        results, p_values = platform.test_manager.get_test_results(test_id)
+        db_results = platform.get_test_results(test_id)
+        results = db_results.get("results", {})
+        p_values = db_results.get("statistical_significance", {})
+
+        if not results:
+            return {
+                "test_id": test_id,
+                "alpha_level": alpha,
+                "significance_analysis": {},
+                "interpretation": _interpret_significance({}, alpha),
+            }
 
         significance_analysis = {}
         control_variant = list(results.keys())[0]
-        control_data = results[control_variant]
+        control_data = _to_stat_object(results[control_variant])
 
         for variant, p_value in p_values.items():
-            variant_data = results[variant]
+            variant_payload = results.get(variant)
+            if not variant_payload:
+                continue
+
+            variant_data = _to_stat_object(variant_payload)
 
             power = await _calculate_power(control_data, variant_data, alpha)
-            effect_size = variant_data.mean - control_data.mean
+            effect_size = float(variant_data.mean - control_data.mean)
             effect_ci = await _calculate_effect_confidence_interval(control_data, variant_data)
 
             significance_analysis[variant] = {
-                "p_value": p_value,
-                "statistically_significant": p_value < alpha,
+                "p_value": float(p_value),
+                "statistically_significant": float(p_value) < alpha,
                 "power": power,
                 "effect_size": effect_size,
                 "effect_confidence_interval": effect_ci,
@@ -136,8 +151,10 @@ async def get_segmentation_analysis(test_id: str, segment_by: str = "user_type",
 @router.get("/{test_id}/financial-impact", summary="Финансовый анализ")
 async def get_financial_impact(test_id: str, arpu: float = 100.0, current_user: User = Depends(get_current_user)):
     try:
-        results, _ = platform.test_manager.get_test_results(test_id)
-        financial_analysis = await _calculate_financial_impact(results, arpu)
+        db_results = platform.get_test_results(test_id)
+        results = db_results.get("results", {})
+        corrected_p = db_results.get("statistical_significance_corrected", {}) or {}
+        financial_analysis = await _calculate_financial_impact(results, corrected_p, arpu)
 
         return {
             "test_id": test_id,
@@ -177,15 +194,20 @@ async def export_test_results(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        results, p_values = platform.test_manager.get_test_results(test_id)
+        db_results = platform.get_test_results(test_id)
 
         export_data = {
             "test_id": test_id,
             "exported_at": datetime.now().isoformat(),
-            "summary": platform._generate_summary(results, p_values),
-            "detailed_results": {k: vars(v) for k, v in results.items()},
-            "statistical_significance": p_values
+            "summary": db_results.get("summary", {}),
+            "detailed_results": db_results.get("results", {}),
+            "statistical_significance": db_results.get("statistical_significance", {}),
+            "statistical_significance_corrected": db_results.get("statistical_significance_corrected", {}),
+            "quality_gate": db_results.get("quality_gate", {}),
         }
+
+        if include_raw_data:
+            export_data["session_metrics"] = db_results.get("session_metrics", {})
 
         if format == "json":
             return export_data
@@ -219,14 +241,24 @@ async def get_time_series_chart_data(
         if not test:
             raise HTTPException(status_code=404, detail="Тест не найден")
 
-        db_centric_results = platform.get_test_results(test_id)
-        quality_gate = db_centric_results.get("quality_gate") or {
-            "status": "yellow",
-            "passed": False,
-            "passed_checks": 0,
-            "total_checks": 5,
-            "checks": [],
-        }
+        try:
+            db_centric_results = platform.get_test_results(test_id)
+            quality_gate = db_centric_results.get("quality_gate") or {
+                "status": "yellow",
+                "passed": False,
+                "passed_checks": 0,
+                "total_checks": 5,
+                "checks": [],
+            }
+        except Exception:
+            # Не блокируем отрисовку графиков из-за вторичных ошибок агрегированного summary.
+            quality_gate = {
+                "status": "yellow",
+                "passed": False,
+                "passed_checks": 0,
+                "total_checks": 5,
+                "checks": [],
+            }
 
         if not time_series_records:
             return {
@@ -251,30 +283,63 @@ async def get_time_series_chart_data(
                 "quality_gate": quality_gate,
             }
 
-        chart_data: List[Dict[str, Any]] = []
+        normalized_rows: List[Dict[str, Any]] = []
         for record in time_series_records:
-            chart_data.append({
-                "users_processed": record.users_processed,
-                "variant": record.variant,
-                "cumulative_metric": record.cumulative_metric,
-                "mean_metric": record.mean_metric,
-                "sample_size": record.sample_size,
-                "p_value": record.p_value,
-                "confidence_interval_lower": record.confidence_interval_lower,
-                "confidence_interval_upper": record.confidence_interval_upper,
+            variant = str(record.variant).strip() if record.variant is not None else ""
+            users_processed = _safe_int(record.users_processed)
+            sample_size = _safe_int(record.sample_size)
+
+            # Пропускаем битые строки, чтобы не ронять весь endpoint.
+            if not variant or users_processed is None:
+                continue
+
+            normalized_rows.append({
+                "users_processed": users_processed,
+                "variant": variant,
+                "cumulative_metric": _safe_float(record.cumulative_metric),
+                "mean_metric": _safe_float(record.mean_metric) or 0.0,
+                "sample_size": sample_size or 0,
+                "p_value": _safe_float(record.p_value),
+                "confidence_interval_lower": _safe_float(record.confidence_interval_lower),
+                "confidence_interval_upper": _safe_float(record.confidence_interval_upper),
             })
 
-        variants = sorted(list(set(record.variant for record in time_series_records)))
-        latest_users = max(r.users_processed for r in time_series_records)
-        latest_rows = [r for r in time_series_records if r.users_processed == latest_users]
+        if not normalized_rows:
+            return {
+                "test_id": test_id,
+                "message": "Time series rows are malformed or empty.",
+                "data": [],
+                "variants": test.variants or [],
+                "completion_percentage": float(test.completion_percentage or 0.0),
+                "stopped_early": bool(test.stopped_early),
+                "early_stop_reason": test.early_stop_reason,
+                "current_sequential_look": int(test.current_sequential_look or 0),
+                "max_sequential_looks": int(test.max_sequential_looks or 5),
+                "srm_check_passed": test.srm_check_passed,
+                "srm_p_value": test.srm_p_value,
+                "traffic_split": {"variant_counts": {}, "variant_percentages": {}},
+                "winner": None,
+                "winner_confidence": "low",
+                "analysis_mode": test.analysis_mode,
+                "analysis_validity": test.analysis_validity,
+                "guardrails": test.guardrails_status,
+                "p_values_corrected_latest": {},
+                "quality_gate": quality_gate,
+            }
+
+        chart_data: List[Dict[str, Any]] = normalized_rows
+
+        variants = sorted(list({row["variant"] for row in normalized_rows}))
+        latest_users = max(row["users_processed"] for row in normalized_rows)
+        latest_rows = [row for row in normalized_rows if row["users_processed"] == latest_users]
 
         control_variant = variants[0] if variants else None
         control_mean = 0.0
-        latest_by_variant: Dict[str, Any] = {}
+        latest_by_variant: Dict[str, Dict[str, Any]] = {}
         for row in latest_rows:
-            latest_by_variant[row.variant] = row
-            if row.variant == control_variant:
-                control_mean = float(row.mean_metric)
+            latest_by_variant[row["variant"]] = row
+            if row["variant"] == control_variant:
+                control_mean = float(row.get("mean_metric") or 0.0)
 
         raw_latest_p_values: Dict[str, float] = {}
         for v in variants:
@@ -283,7 +348,7 @@ async def get_time_series_chart_data(
             row = latest_by_variant.get(v)
             if not row:
                 continue
-            raw_latest_p_values[v] = float(row.p_value) if row.p_value is not None else 1.0
+            raw_latest_p_values[v] = float(row["p_value"]) if row.get("p_value") is not None else 1.0
 
         corrected_latest_p_values = ABDecisionEngine.holm_bonferroni_correction(raw_latest_p_values)
 
@@ -296,7 +361,8 @@ async def get_time_series_chart_data(
             row = latest_by_variant.get(v)
             if not row:
                 continue
-            uplift = ((row.mean_metric - control_mean) / control_mean * 100.0) if control_mean != 0 else 0.0
+            row_mean = float(row.get("mean_metric") or 0.0)
+            uplift = ((row_mean - control_mean) / control_mean * 100.0) if control_mean != 0 else 0.0
             p_val_corrected = corrected_latest_p_values.get(v, 1.0)
 
             # Победителя определяем только среди статистически значимых вариантов
@@ -316,13 +382,14 @@ async def get_time_series_chart_data(
                 row = latest_by_variant.get(v)
                 if not row:
                     continue
-                uplift = ((row.mean_metric - control_mean) / control_mean * 100.0) if control_mean != 0 else 0.0
+                row_mean = float(row.get("mean_metric") or 0.0)
+                uplift = ((row_mean - control_mean) / control_mean * 100.0) if control_mean != 0 else 0.0
                 if uplift > observed_best:
                     observed_best = uplift
             best_uplift = observed_best if observed_best != -1e18 else 0.0
 
         variant_counts = {
-            v: int(latest_by_variant[v].sample_size) if v in latest_by_variant else 0
+            v: int(latest_by_variant[v].get("sample_size") or 0) if v in latest_by_variant else 0
             for v in variants
         }
         total_count = sum(variant_counts.values())
@@ -384,7 +451,7 @@ async def get_time_series_chart_data(
             power_over_time.append(power_point)
             uplift_over_time.append(uplift_point)
 
-        return {
+        response_payload = {
             "test_id": test_id,
             "variants": variants,
             "data": chart_data,
@@ -393,6 +460,7 @@ async def get_time_series_chart_data(
             "completion_percentage": float(test.completion_percentage or 0.0),
             "stopped_early": bool(test.stopped_early),
             "early_stop_reason": test.early_stop_reason,
+            "early_stopping_enabled": bool(_as_dict(test.extra_config).get("early_stopping_enabled", False)),
             "current_sequential_look": int(test.current_sequential_look or 0),
             "max_sequential_looks": int(test.max_sequential_looks or 5),
             "srm_check_passed": test.srm_check_passed,
@@ -412,11 +480,56 @@ async def get_time_series_chart_data(
             "p_values_corrected_latest": corrected_latest_p_values,
             "quality_gate": quality_gate,
         }
+        return _sanitize_for_json(response_payload)
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _as_dict(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        f = float(value)
+        return f if math.isfinite(f) else None
+    except Exception:
+        return None
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        # Защита от nan/inf и строковых артефактов.
+        f = float(value)
+        if not math.isfinite(f):
+            return None
+        return int(f)
+    except Exception:
+        return None
+
+
+def _sanitize_for_json(value: Any) -> Any:
+    """
+    Рекурсивно очищает payload от NaN/Inf значений,
+    которые приводят к 500 при JSON-сериализации в FastAPI/Starlette.
+    """
+    if isinstance(value, dict):
+        return {k: _sanitize_for_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_for_json(v) for v in value]
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, np.floating):
+        f = float(value)
+        return f if math.isfinite(f) else None
+    return value
 
 
 async def _perform_detailed_analysis(results: Dict[str, Any]) -> Dict[str, Any]:
@@ -547,59 +660,172 @@ async def _generate_segmentation_analysis(test_id: str, segment_by: str) -> Dict
         if not records:
             return {"segments": {}, "message": "No records in dataset"}
 
-    # без pandas: группируем в памяти
-    segments: Dict[str, int] = {}
-    for row in records:
-        key = str(row.get(segment_by, "unknown"))
-        segments[key] = segments.get(key, 0) + 1
+        sessions = db.query(TestSessionORM).filter(TestSessionORM.test_id == test_id).all()
 
-    total = max(1, sum(segments.values()))
-    return {
-        "segments": {
-            k: {
-                "users": v,
-                "share_percent": v / total * 100.0,
+    # Индексируем датасет по user_id, чтобы анализировать фактические outcome по сегментам и вариантам.
+    record_by_user_id: Dict[str, Dict[str, Any]] = {}
+    for row in records:
+        uid = row.get("user_id")
+        if uid is not None:
+            record_by_user_id[str(uid)] = row
+
+    primary_metric = str(test.primary_metric or "")
+    ratio_num_key = f"{primary_metric}_numerator"
+    ratio_den_key = f"{primary_metric}_denominator"
+    metric_type = str(test.metric_type or "continuous")
+
+    segments: Dict[str, Dict[str, Any]] = {}
+    matched_sessions = 0
+
+    for session in sessions:
+        user_row = record_by_user_id.get(str(session.user_id))
+        if user_row is None:
+            continue
+
+        segment_value = str(user_row.get(segment_by, "unknown"))
+        variant = str(session.variant)
+        metrics = dict(session.metrics or {})
+
+        metric_value: Optional[float] = None
+        if metric_type == "ratio":
+            num_raw = metrics.get(ratio_num_key)
+            den_raw = metrics.get(ratio_den_key)
+            try:
+                if num_raw is not None and den_raw is not None:
+                    num = float(num_raw)
+                    den = float(den_raw)
+                    if np.isfinite(num) and np.isfinite(den) and den > 0:
+                        metric_value = float(num / den)
+            except Exception:
+                metric_value = None
+
+            if metric_value is None and primary_metric in metrics:
+                try:
+                    raw_ratio = float(metrics.get(primary_metric))
+                    if np.isfinite(raw_ratio):
+                        metric_value = raw_ratio
+                except Exception:
+                    metric_value = None
+        else:
+            try:
+                raw = metrics.get(primary_metric)
+                if raw is not None:
+                    value = float(raw)
+                    if np.isfinite(value):
+                        metric_value = value
+            except Exception:
+                metric_value = None
+
+        if segment_value not in segments:
+            segments[segment_value] = {
+                "users": 0,
+                "by_variant": {},
             }
-            for k, v in segments.items()
-        },
+
+        seg = segments[segment_value]
+        seg["users"] += 1
+
+        if variant not in seg["by_variant"]:
+            seg["by_variant"][variant] = {
+                "sample_size": 0,
+                "mean_metric": 0.0,
+                "metric_sum": 0.0,
+                "metric_count": 0,
+            }
+
+        card = seg["by_variant"][variant]
+        card["sample_size"] += 1
+        if metric_value is not None:
+            card["metric_sum"] += float(metric_value)
+            card["metric_count"] += 1
+
+        matched_sessions += 1
+
+    total = max(1, sum(seg["users"] for seg in segments.values()))
+
+    # Финализация mean
+    for seg_data in segments.values():
+        for card in seg_data["by_variant"].values():
+            cnt = int(card.get("metric_count", 0))
+            card["mean_metric"] = float(card["metric_sum"] / cnt) if cnt > 0 else 0.0
+            card.pop("metric_sum", None)
+            card.pop("metric_count", None)
+        seg_data["share_percent"] = float(seg_data["users"]) / total * 100.0
+
+    return {
+        "segments": segments,
         "total_users": total,
+        "matched_sessions": matched_sessions,
+        "metric": primary_metric,
+        "metric_type": metric_type,
     }
 
 
-async def _calculate_financial_impact(results: Dict[str, Any], arpu: float) -> Dict[str, Any]:
+async def _calculate_financial_impact(
+    results: Dict[str, Any],
+    corrected_p_values: Dict[str, float],
+    arpu: float,
+) -> Dict[str, Any]:
     variants = list(results.keys())
     if not variants:
         return {"incremental_revenue": 0.0, "best_variant": None}
 
-    control = results[variants[0]]
+    control_variant = variants[0]
+    control = _to_stat_object(results[control_variant])
     control_mean = float(control.mean)
     control_n = int(control.sample_size)
 
-    best_variant = variants[0]
-    best_incremental = 0.0
-
     by_variant = {}
+    best_significant_variant: Optional[str] = None
+    best_significant_incremental = 0.0
+
+    best_observed_variant: Optional[str] = None
+    best_observed_incremental = -1e18
+
     for v in variants:
-        stat = results[v]
+        stat = _to_stat_object(results[v])
         mean_val = float(stat.mean)
         n_val = int(stat.sample_size)
         uplift = ((mean_val - control_mean) / control_mean * 100.0) if control_mean != 0 else 0.0
+
+        # Оценка инкремента: uplift метрики * ARPU * размер когорты варианта.
         incremental = (mean_val - control_mean) * n_val * float(arpu)
+
+        p_corr = None if v == control_variant else corrected_p_values.get(v)
+        is_significant = bool(p_corr is not None and float(p_corr) < 0.05)
+
         by_variant[v] = {
-            "uplift_percent": uplift,
-            "sample_size": n_val,
-            "incremental_revenue": incremental,
+            "uplift_percent": float(uplift),
+            "sample_size": int(n_val),
+            "incremental_revenue": float(incremental),
+            "p_value_corrected": (None if p_corr is None else float(p_corr)),
+            "significant": is_significant,
         }
-        if incremental > best_incremental:
-            best_incremental = incremental
-            best_variant = v
+
+        if v != control_variant and incremental > best_observed_incremental:
+            best_observed_incremental = float(incremental)
+            best_observed_variant = v
+
+        if v != control_variant and is_significant and incremental > best_significant_incremental:
+            best_significant_incremental = float(incremental)
+            best_significant_variant = v
+
+    deployed_variant = best_significant_variant
+    deployed_incremental = best_significant_incremental if best_significant_variant else 0.0
 
     return {
-        "control_variant": variants[0],
-        "best_variant": best_variant,
-        "incremental_revenue": float(best_incremental),
+        "control_variant": control_variant,
+        "best_variant": deployed_variant,
+        "best_observed_variant": best_observed_variant,
+        "incremental_revenue": float(deployed_incremental),
+        "best_observed_incremental_revenue": float(max(0.0, best_observed_incremental if best_observed_incremental != -1e18 else 0.0)),
         "by_variant": by_variant,
-        "control_users": control_n,
+        "control_users": int(control_n),
+        "assumptions": {
+            "arpu": float(arpu),
+            "uses_significance_gate": True,
+            "significance_threshold": 0.05,
+        },
     }
 
 
@@ -667,12 +893,28 @@ async def _compare_segments(segments_analysis: Dict[str, Any]) -> Dict[str, Any]
 
 async def _calculate_roi(financial_analysis: Dict[str, Any]) -> Dict[str, Any]:
     incremental_revenue = float(financial_analysis.get("incremental_revenue", 0.0))
-    estimated_cost = 1000.0
-    roi = ((incremental_revenue - estimated_cost) / estimated_cost) * 100.0 if estimated_cost else 0.0
+
+    cost_scenarios = [500.0, 1000.0, 3000.0]
+    rollout_shares = [0.25, 0.5, 1.0]
+
+    matrix: List[Dict[str, Any]] = []
+    for cost in cost_scenarios:
+        for share in rollout_shares:
+            effective_incremental = incremental_revenue * float(share)
+            roi = ((effective_incremental - cost) / cost) * 100.0 if cost > 0 else 0.0
+            matrix.append(
+                {
+                    "estimated_cost": float(cost),
+                    "rollout_share": float(share),
+                    "incremental_revenue": float(effective_incremental),
+                    "roi_percent": float(roi),
+                }
+            )
+
     return {
-        "estimated_cost": estimated_cost,
-        "incremental_revenue": incremental_revenue,
-        "roi_percent": roi,
+        "base_incremental_revenue": float(incremental_revenue),
+        "scenarios": matrix,
+        "note": "ROI рассчитан по сценариям стоимости и доли rollout вместо фиксированной заглушки",
     }
 
 
@@ -702,3 +944,21 @@ def _calculate_relative_improvement(control_mean: float, variant_mean: float) ->
     if control_mean == 0:
         return 0.0
     return ((variant_mean - control_mean) / control_mean) * 100
+
+
+def _to_stat_object(stat: Any) -> Any:
+    """
+    Приводит статистику варианта к объекту с полями .mean/.std/.sample_size.
+    Поддерживает как dict (DB-centric ответ), так и dataclass-объекты.
+    """
+    if isinstance(stat, dict):
+        return type(
+            "StatObj",
+            (),
+            {
+                "mean": float(stat.get("mean", 0.0)),
+                "std": float(stat.get("std", 0.0)),
+                "sample_size": int(stat.get("sample_size", 0)),
+            },
+        )()
+    return stat

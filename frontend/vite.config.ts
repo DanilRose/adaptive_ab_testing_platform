@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+const proxyTarget = process.env.FRONTEND_PROXY_TARGET || 'http://backend:8000'
+
 export default defineConfig({
   plugins: [react()],
   optimizeDeps: {
@@ -19,7 +21,7 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: 'http://backend:8000',
+        target: proxyTarget,
         changeOrigin: true,
       },
     },

@@ -96,6 +96,9 @@ class GoogleStandardABTestSimulator:
         self.analyzer = StatisticalAnalyzer(alpha=0.05)
 
         self.results_by_variant: Dict[str, List[float]] = {}
+        # Для ratio-метрик храним компоненты numerator/denominator по вариантам,
+        # чтобы не деградировать в denominator=1 при промежуточном анализе.
+        self.ratio_components_by_variant: Dict[str, Dict[str, List[float]]] = {}
         self.session_data: List[Dict[str, Any]] = []
 
         self.time_series_data: List[Dict[str, Any]] = []
@@ -185,7 +188,10 @@ class GoogleStandardABTestSimulator:
             test = db.query(ABTestORM).filter(ABTestORM.test_id == self.config.test_id).first()
             if not test:
                 raise ValueError(f"Test {self.config.test_id} not found")
-            
+
+            extra = dict(test.extra_config or {})
+            early_stopping_enabled = bool(extra.get("early_stopping_enabled", self.config.enable_early_stopping))
+
             return {
                 'test_id': test.test_id,
                 'primary_metric': test.primary_metric,
@@ -195,6 +201,7 @@ class GoogleStandardABTestSimulator:
                 'sample_size': test.sample_size,
                 'confidence_level': test.confidence_level,
                 'power': test.power,
+                'early_stopping_enabled': early_stopping_enabled,
             }
     
     def _estimate_simulation_duration_minutes(
@@ -350,6 +357,22 @@ class GoogleStandardABTestSimulator:
         low = min_val if np.isfinite(min_val) else generated
         high = max_val if np.isfinite(max_val) and max_val > low else generated
         return float(np.clip(generated, low, high))
+
+    def _normalize_reward_for_adaptive(self, raw_value: float, metric_type: str) -> float:
+        """
+        Нормализация reward для Thompson Sampling в [0, 1].
+        - binary: ожидаем 0/1
+        - continuous/ratio: мягкая логистическая нормализация
+        """
+        value = float(raw_value)
+        mt = str(metric_type or "continuous").lower()
+
+        if mt == "binary":
+            return float(np.clip(value, 0.0, 1.0))
+
+        scale = max(1.0, abs(value) + 1.0)
+        normalized = 1.0 / (1.0 + np.exp(-value / scale))
+        return float(np.clip(normalized, 0.0, 1.0))
     
     def _calculate_conversion_probability(
         self, 
@@ -408,6 +431,44 @@ class GoogleStandardABTestSimulator:
         variant_config = self.config.variant_effects.get(variant, {})
         return float(variant_config.get(metric, 1.0))
     
+    def _extract_ratio_components(
+        self,
+        user: pd.Series,
+        primary_metric: str,
+        ratio_value: float,
+    ) -> Optional[tuple[float, float]]:
+        """Пытается извлечь корректные numerator/denominator для ratio-метрики из данных пользователя."""
+        num_key = f"{primary_metric}_numerator"
+        den_key = f"{primary_metric}_denominator"
+
+        num_raw = user.get(num_key)
+        den_raw = user.get(den_key)
+
+        try:
+            if num_raw is not None and den_raw is not None:
+                num = float(num_raw)
+                den = float(den_raw)
+                if np.isfinite(num) and np.isfinite(den) and den > 0:
+                    return float(num), float(den)
+        except Exception:
+            pass
+
+        # Практический фолбэк для CTR-подобных метрик: clicks / impressions
+        # (данные генератора содержат click и pages_per_session).
+        pm = str(primary_metric or "").lower()
+        if pm in {"ctr", "click_rate", "clickthrough_rate"}:
+            try:
+                clicks = float(user.get("click", 0.0))
+                impressions = float(user.get("pages_per_session", 0.0))
+                if np.isfinite(clicks) and np.isfinite(impressions) and impressions > 0:
+                    return float(max(0.0, clicks)), float(impressions)
+            except Exception:
+                pass
+
+        # Если ratio-компоненты не восстановимы, лучше пропустить p-value ratio-сравнения,
+        # чем искажать его denominator=1.
+        return None
+
     def _should_check_progress(self, users_processed: int) -> bool:
         """Проверяем прогресс каждые 20% пользователей"""
         if not self.config.enable_sequential_testing:
@@ -445,12 +506,36 @@ class GoogleStandardABTestSimulator:
 
             if variant != control_variant and len(control_data) >= 30 and len(data) >= 30:
                 try:
-                    from scipy import stats
-                    t_stat, p_value = stats.ttest_ind(control_data, data)
-                    p_value = float(p_value)
+                    metric_type = str(test_config.get('metric_type', 'continuous'))
+                    if metric_type == 'ratio':
+                        control_ratio = self.ratio_components_by_variant.get(control_variant, {"numerators": [], "denominators": []})
+                        treat_ratio = self.ratio_components_by_variant.get(variant, {"numerators": [], "denominators": []})
+
+                        control_num = np.asarray(control_ratio.get("numerators", []), dtype=float)
+                        control_den = np.asarray(control_ratio.get("denominators", []), dtype=float)
+                        treat_num = np.asarray(treat_ratio.get("numerators", []), dtype=float)
+                        treat_den = np.asarray(treat_ratio.get("denominators", []), dtype=float)
+
+                        if len(control_num) >= 10 and len(treat_num) >= 10:
+                            ratio_result = self.analyzer.analyze_ratio_metric(
+                                control_numerators=control_num,
+                                control_denominators=control_den,
+                                treatment_numerators=treat_num,
+                                treatment_denominators=treat_den,
+                                num_comparisons=max(1, len(variants) - 1),
+                            )
+                            p_value = float(ratio_result.p_value)
+                        else:
+                            p_value = None
+                    else:
+                        from scipy import stats
+                        # Welch t-test для консистентности с финальной аналитикой.
+                        _, p_raw = stats.ttest_ind(control_data, data, equal_var=False)
+                        p_value = float(p_raw)
 
                     # ДИ для среднего значения МЕТРИКИ самого варианта (а не для разности с контролем),
                     # чтобы график "Доверительные интервалы" отображал корректную сущность.
+                    from scipy import stats
                     variant_std = float(np.std(data, ddof=1)) if len(data) > 1 else 0.0
                     variant_se = variant_std / np.sqrt(max(1, len(data)))
                     if variant_se > 0:
@@ -596,11 +681,22 @@ class GoogleStandardABTestSimulator:
                     num_comparisons=max(1, len(variants) - 1),
                 )
             elif metric_type == 'ratio':
+                control_ratio = self.ratio_components_by_variant.get(control_variant, {"numerators": [], "denominators": []})
+                treat_ratio = self.ratio_components_by_variant.get(variant, {"numerators": [], "denominators": []})
+
+                control_num = np.asarray(control_ratio.get("numerators", []), dtype=float)
+                control_den = np.asarray(control_ratio.get("denominators", []), dtype=float)
+                treat_num = np.asarray(treat_ratio.get("numerators", []), dtype=float)
+                treat_den = np.asarray(treat_ratio.get("denominators", []), dtype=float)
+
+                if len(control_num) < 10 or len(treat_num) < 10:
+                    continue
+
                 test_result = self.analyzer.analyze_ratio_metric(
-                    control_numerators=control_data,
-                    control_denominators=np.ones_like(control_data),
-                    treatment_numerators=treatment_data,
-                    treatment_denominators=np.ones_like(treatment_data),
+                    control_numerators=control_num,
+                    control_denominators=control_den,
+                    treatment_numerators=treat_num,
+                    treatment_denominators=treat_den,
                     num_comparisons=max(1, len(variants) - 1),
                 )
             else:
@@ -668,6 +764,10 @@ class GoogleStandardABTestSimulator:
         test_config = self._get_test_config()
         synthetic_data = self._load_synthetic_data()
 
+        # Конфиг early stopping подтягиваем из теста/extra_config,
+        # чтобы sequential-look в UI соответствовал фактическому режиму.
+        self.config.enable_early_stopping = bool(test_config.get('early_stopping_enabled', self.config.enable_early_stopping))
+
         dynamic_minutes = self._estimate_simulation_duration_minutes(
             user_count=self.config.user_count,
             sample_size=test_config.get('sample_size'),
@@ -693,6 +793,10 @@ class GoogleStandardABTestSimulator:
         
         for variant in test_config['variants']:
             self.results_by_variant[variant] = []
+            self.ratio_components_by_variant[variant] = {
+                "numerators": [],
+                "denominators": [],
+            }
         
         start_time = datetime.utcnow()
         variant_counts = {v: 0 for v in test_config['variants']}
@@ -719,9 +823,23 @@ class GoogleStandardABTestSimulator:
             )
             
             self.results_by_variant[variant].append(metric_value)
+
+            if str(test_config.get('metric_type', 'continuous')) == 'ratio':
+                ratio_components = self._extract_ratio_components(
+                    user=user,
+                    primary_metric=primary_metric,
+                    ratio_value=float(metric_value),
+                )
+                if ratio_components is not None:
+                    num, den = ratio_components
+                    self.ratio_components_by_variant[variant]["numerators"].append(float(num))
+                    self.ratio_components_by_variant[variant]["denominators"].append(float(den))
             
             if self.config.traffic_split_strategy == "adaptive":
-                normalized_reward = min(1.0, metric_value / 1000.0)
+                normalized_reward = self._normalize_reward_for_adaptive(
+                    raw_value=metric_value,
+                    metric_type=str(test_config.get('metric_type', 'continuous')),
+                )
                 self.traffic_splitter.update(variant, normalized_reward)
             
             if i % 500 == 0 or i == self.config.user_count:
