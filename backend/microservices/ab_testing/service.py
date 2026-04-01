@@ -7,9 +7,9 @@ from typing import Any, Dict, Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from backend.ab_testing.managers import AdaptiveABTestingPlatform
-from backend.database import crud
-from backend.services.ab_test_simulator import run_ab_test_simulation
+from backend.microservices.ab_testing_core.managers import AdaptiveABTestingPlatform
+from backend.microservices.database import crud
+from backend.microservices.services.ab_test_simulator import run_ab_test_simulation
 
 
 class ABPlatformProvider:

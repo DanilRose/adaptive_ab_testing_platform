@@ -21,9 +21,9 @@ class TestSession:
         if self.metrics is None:
             self.metrics = {}
 
-from backend.database.session import SessionLocal
-from backend.database import crud
-from backend.database.models import TestSessionORM, ABTestORM
+from backend.microservices.database.session import SessionLocal
+from backend.microservices.database import crud
+from backend.microservices.database.models import TestSessionORM, ABTestORM
 
 class SessionManager:
     def __init__(self):

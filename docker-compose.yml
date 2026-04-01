@@ -19,7 +19,7 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     container_name: ab-testing-backend
-    command: uvicorn backend.api.main:app --host 0.0.0.0 --port 8000 --reload --log-level info
+    command: uvicorn backend.microservices.gateway.app:app --host 0.0.0.0 --port 8000 --reload --log-level info
     ports:
       - "8000:8000"
     environment:

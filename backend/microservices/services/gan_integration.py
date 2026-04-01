@@ -6,10 +6,10 @@ import os
 
 from typing import Optional, Dict, Any
 
-from backend.services.safe_loader import safe_torch_load
-from backend.services.traffic_generator.data_generator import RealisticDataGenerator
-from backend.gan.config import GANConfig  
-from backend.gan.models import GAN 
+from backend.microservices.services.safe_loader import safe_torch_load
+from backend.microservices.services.traffic_generator.data_generator import RealisticDataGenerator
+from backend.microservices.gan.config import GANConfig  
+from backend.microservices.gan.models import GAN 
 
 class GANService:
     def __init__(self):

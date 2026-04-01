@@ -6,22 +6,22 @@ from dataclasses import dataclass, asdict
 import pandas as pd
 import numpy as np
 
-from backend.ab_testing.traffic_splitter import (
+from backend.microservices.ab_testing_core.traffic_splitter import (
     FixedTrafficSplitter,
     AdaptiveTrafficSplitter,
     ABVariant,
     create_equal_split_variants,
 )
-from backend.ab_testing.statistics import (
+from backend.microservices.ab_testing_core.statistics import (
     SequentialTesting,
     SRMChecker,
     StatisticalAnalyzer,
     SampleSizeCalculator,
     run_full_ab_analysis,
 )
-from backend.database.session import SessionLocal, AsyncSessionLocal
-from backend.database import crud
-from backend.database.models import ABTestORM, ABTestTimeSeriesORM
+from backend.microservices.database.session import SessionLocal, AsyncSessionLocal
+from backend.microservices.database import crud
+from backend.microservices.database.models import ABTestORM, ABTestTimeSeriesORM
 from backend.microservices.data_gan.service import DatasetPersistenceService
 
 
@@ -479,8 +479,8 @@ class GoogleStandardABTestSimulator:
     def _save_snapshot_to_db_sync(self, snapshot: dict):
         """Синхронное сохранение snapshot в БД (для использования во время симуляции)"""
         try:
-            from backend.database.session import SessionLocal
-            from backend.database import crud
+            from backend.microservices.database.session import SessionLocal
+            from backend.microservices.database import crud
 
             with SessionLocal() as db:
                 crud.create_ab_test_time_series(

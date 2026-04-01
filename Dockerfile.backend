@@ -21,8 +21,8 @@ RUN pip install --no-cache-dir \
 # Код бекенда НЕ копируется — он монтируется через volume в docker-compose.yml
 # Это позволяет uvicorn --reload видеть изменения файлов в реальном времени
 
-RUN mkdir -p /app/backend/gan/checkpoints /app/logs
+RUN mkdir -p /app/backend/microservices/storage/checkpoints /app/logs
 
 EXPOSE 8000
 
-CMD ["uvicorn", "backend.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--log-level", "info"]
+CMD ["uvicorn", "backend.microservices.gateway.app:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--log-level", "info"]

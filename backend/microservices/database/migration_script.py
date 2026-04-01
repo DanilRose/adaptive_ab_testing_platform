@@ -1,7 +1,7 @@
 # backend/database/migration_script.py
 
 from sqlalchemy import text
-from backend.database.session import engine, SessionLocal
+from backend.microservices.database.session import engine, SessionLocal
 
 def migrate_ab_tests_table():
 

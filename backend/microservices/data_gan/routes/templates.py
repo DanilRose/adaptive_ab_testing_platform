@@ -8,10 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.auth.models import User
-from backend.auth.service import require_role
-from backend.database import crud
-from backend.database.session import get_db
+from backend.microservices.auth_core.models import User
+from backend.microservices.auth_core.service import require_role
+from backend.microservices.database import crud
+from backend.microservices.database.session import get_db
 
 router = APIRouter(prefix="/api/v1/templates", tags=["Шаблоны"])
 

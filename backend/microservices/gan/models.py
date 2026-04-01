@@ -407,7 +407,7 @@ class GAN:
         try:
             synthetic_val = self.generate(5000)
             
-            from backend.services.evaluator import GANEvaluator
+            from backend.microservices.services.evaluator import GANEvaluator
             evaluator = GANEvaluator(real_data.sample(5000), synthetic_val, scalers=self.scalers)
             fid_score = evaluator.calculate_fid_score()
             

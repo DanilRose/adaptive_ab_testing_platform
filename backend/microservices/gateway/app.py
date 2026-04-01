@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-import math
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,20 +14,10 @@ from backend.microservices.data_gan.routes.data import router as data_router
 from backend.microservices.ab_testing.routes.results import router as results_router
 from backend.microservices.data_gan.routes.templates import router as templates_router
 from backend.microservices.common import ServiceHealthResponse, get_service_settings
+from backend.microservices.shared.utils import sanitize_data
 
+logger = logging.getLogger(__name__)
 settings = get_service_settings(default_name="gateway-service", default_port=8000)
-
-
-def sanitize_data(data):
-    if isinstance(data, dict):
-        return {k: sanitize_data(v) for k, v in data.items()}
-    if isinstance(data, list):
-        return [sanitize_data(item) for item in data]
-    if isinstance(data, float):
-        if math.isnan(data) or math.isinf(data):
-            return None
-        return data
-    return data
 
 
 class SanitizedJSONResponse(JSONResponse):
@@ -34,11 +25,25 @@ class SanitizedJSONResponse(JSONResponse):
         return super().render(sanitize_data(content))
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Инициализация базы данных при старте gateway."""
+    from backend.microservices.database.init_db import bootstrap_database
+    try:
+        bootstrap_database()
+        logger.info("✅ Database bootstrap completed")
+    except Exception as exc:
+        logger.warning("⚠️ Database bootstrap warning: %s", exc)
+    yield
+    logger.info("🛑 Gateway shutting down")
+
+
 app = FastAPI(
     title="Adaptive A/B Testing Platform Gateway",
     description="API gateway для микросервисов Adaptive A/B Testing",
     version=settings.service_version,
     default_response_class=SanitizedJSONResponse,
+    lifespan=lifespan,
 )
 
 app.add_middleware(

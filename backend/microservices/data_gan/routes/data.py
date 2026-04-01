@@ -8,11 +8,11 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.api.platform_instance import get_platform
-from backend.auth.models import User
-from backend.auth.service import require_role
-from backend.database import crud
-from backend.database.session import get_db
+from backend.microservices.ab_testing.service import ABPlatformProvider
+from backend.microservices.auth_core.models import User
+from backend.microservices.auth_core.service import require_role
+from backend.microservices.database import crud
+from backend.microservices.database.session import get_db
 from backend.microservices.ab_testing import ABTestLifecycleService
 from backend.microservices.data_gan import (
     DatasetPersistenceService,
@@ -20,10 +20,10 @@ from backend.microservices.data_gan import (
     DataGANLifecycleService,
 )
 from backend.microservices.shared import SimpleTTLCache
-from backend.services.gan_integration import gan_service
-from backend.services.traffic_generator.data_generator import RealisticDataGenerator
+from backend.microservices.services.gan_integration import gan_service
+from backend.microservices.services.traffic_generator.data_generator import RealisticDataGenerator
 
-platform = get_platform()
+platform = ABPlatformProvider.get()
 
 router = APIRouter(prefix="/api/v1/data", tags=["Data Generation"])
 

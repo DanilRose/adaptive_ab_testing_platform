@@ -1,4 +1,3 @@
-import math
 import pandas as pd
 import numpy as np
 from scipy import stats
@@ -10,12 +9,7 @@ import seaborn as sns
 import warnings
 warnings.filterwarnings('ignore')
 
-
-def sanitize_float(value):
-    if isinstance(value, float):
-        if math.isnan(value) or math.isinf(value):
-            return None
-    return value
+from backend.microservices.shared.utils import sanitize_float
 
 
 class GANEvaluator:

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-BASE_STORAGE_DIR = Path("backend") / "storage"
+BASE_STORAGE_DIR = Path("backend") / "microservices" / "storage"
 DATASET_DIR = BASE_STORAGE_DIR / "datasets"
 CHECKPOINT_DIR = BASE_STORAGE_DIR / "checkpoints"
 

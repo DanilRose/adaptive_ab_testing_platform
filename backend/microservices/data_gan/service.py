@@ -5,9 +5,9 @@ from typing import Any, Dict, Optional
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from backend.database.session import SessionLocal
+from backend.microservices.database.session import SessionLocal
 
-from backend.database import crud
+from backend.microservices.database import crud
 from backend.microservices.shared.storage import (
     load_checkpoint_binary,
     load_dataset_records,

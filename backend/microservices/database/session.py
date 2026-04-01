@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-from backend.database.config import DATABASE_URL, ASYNC_DATABASE_URL
+from backend.microservices.database.config import DATABASE_URL, ASYNC_DATABASE_URL
 
 
 class Base(DeclarativeBase):

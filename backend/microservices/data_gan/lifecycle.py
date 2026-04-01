@@ -8,7 +8,7 @@ from typing import Any, Optional
 import torch
 from fastapi import BackgroundTasks
 
-from backend.gan.config import GANConfig
+from backend.microservices.gan.config import GANConfig
 from backend.microservices.data_gan.service import CheckpointStorageService
 
 

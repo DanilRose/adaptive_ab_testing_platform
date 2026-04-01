@@ -76,9 +76,9 @@ docker-compose*.yml
 .dockerignore
 
 # GAN чекпоинты (монтируются через volume — не копировать в образ!) 
-backend/gan/checkpoints/*.pth
-backend/gan/checkpoints/*.pt
-backend/gan/checkpoints/*.ckpt
+backend/microservices/storage/checkpoints/*.pth
+backend/microservices/storage/checkpoints/*.pt
+backend/microservices/storage/checkpoints/*.ckpt
 
 # Временные файлы 
 *.tmp

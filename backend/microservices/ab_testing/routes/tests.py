@@ -7,17 +7,17 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session
 
-from backend.ab_testing.core import MetricType, TestConfig
-from backend.api.platform_instance import get_platform
-from backend.auth.models import User
-from backend.auth.service import get_current_user, require_role
-from backend.database import crud
-from backend.database.session import get_db
+from backend.microservices.ab_testing_core.core import MetricType, TestConfig
+from backend.microservices.ab_testing.service import ABPlatformProvider
+from backend.microservices.auth_core.models import User
+from backend.microservices.auth_core.service import get_current_user, require_role
+from backend.microservices.database import crud
+from backend.microservices.database.session import get_db
 from backend.microservices.ab_testing import ABTestLifecycleService
 
 router = APIRouter(prefix="/api/v1/tests", tags=["A/B Tests"])
 
-platform = get_platform()
+platform = ABPlatformProvider.get()
 
 
 class TestCreateRequest(BaseModel):

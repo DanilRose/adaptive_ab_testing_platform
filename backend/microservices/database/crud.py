@@ -6,7 +6,7 @@ from sqlalchemy import func, select, update, delete
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.database.models import ABTestORM, CheckpointORM, GeneratedDataORM, UserORM, ABTestTimeSeriesORM, TemplateORM
+from backend.microservices.database.models import ABTestORM, CheckpointORM, GeneratedDataORM, UserORM, ABTestTimeSeriesORM, TemplateORM
 
 
 def get_user_by_username(db: Session, username: str) -> Optional[UserORM]:

@@ -11,9 +11,9 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
-from backend.auth.models import User, UserInDB, TokenData, UserRole
-from backend.database.models import UserORM
-from backend.database.session import SessionLocal
+from backend.microservices.auth_core.models import User, UserInDB, TokenData, UserRole
+from backend.microservices.database.models import UserORM
+from backend.microservices.database.session import SessionLocal
 
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "adaptive-ab-testing-secret-key-2024-very-secure")
 ALGORITHM = "HS256"

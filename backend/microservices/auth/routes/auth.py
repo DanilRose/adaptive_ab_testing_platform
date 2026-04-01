@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import OAuth2PasswordRequestForm
 
-from backend.auth.models import Token, User
-from backend.auth.service import (
+from backend.microservices.auth_core.models import Token, User
+from backend.microservices.auth_core.service import (
     ACCESS_TOKEN_EXPIRE_HOURS,
     authenticate_user,
     create_access_token,

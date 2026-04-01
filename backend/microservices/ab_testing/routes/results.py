@@ -7,17 +7,17 @@ import numpy as np
 import scipy.stats as stats
 from datetime import datetime
 
-from backend.api.platform_instance import get_platform
-from backend.auth.models import User
-from backend.auth.service import get_current_user
-from backend.database.session import SessionLocal
-from backend.database import crud
-from backend.database.models import ABTestORM
-from backend.ab_testing.statistics import StatisticalAnalyzer
+from backend.microservices.ab_testing.service import ABPlatformProvider
+from backend.microservices.auth_core.models import User
+from backend.microservices.auth_core.service import get_current_user
+from backend.microservices.database.session import SessionLocal
+from backend.microservices.database import crud
+from backend.microservices.database.models import ABTestORM
+from backend.microservices.ab_testing_core.statistics import StatisticalAnalyzer
 from backend.microservices.data_gan.service import DatasetPersistenceService
 
 router = APIRouter(prefix="/api/v1/results", tags=["Results & Analytics"])
-platform = get_platform()
+platform = ABPlatformProvider.get()
 
 
 class StatisticalSummary(BaseModel):

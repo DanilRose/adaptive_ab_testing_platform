@@ -7,8 +7,8 @@ from fastapi import BackgroundTasks
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from backend.database import crud
-from backend.database.session import SessionLocal
+from backend.microservices.database import crud
+from backend.microservices.database.session import SessionLocal
 from backend.microservices.ab_testing.service import ABSimulationOrchestrator
 
 

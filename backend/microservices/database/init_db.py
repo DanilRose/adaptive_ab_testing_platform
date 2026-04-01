@@ -7,10 +7,10 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from backend.database.models import UserORM
-from backend.database.session import Base, engine
-from backend.database.migration_script import migrate_ab_tests_table
-from backend.auth.service import get_password_hash
+from backend.microservices.database.models import UserORM
+from backend.microservices.database.session import Base, engine
+from backend.microservices.database.migration_script import migrate_ab_tests_table
+from backend.microservices.auth_core.service import get_password_hash
 
 
 logger = logging.getLogger(__name__)
