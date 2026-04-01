@@ -7,6 +7,7 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from backend.microservices.database import crud
 from backend.microservices.database.models import UserORM
 from backend.microservices.database.session import Base, engine
 from backend.microservices.database.migration_script import migrate_ab_tests_table
@@ -84,4 +85,15 @@ def bootstrap_database() -> None:
         logger.warning("Schema migration step failed during bootstrap: %s", exc)
 
     seed_default_users()
+
+    # Идемпотентная инициализация системных шаблонов:
+    # - на чистой БД создаст все шаблоны из кода;
+    # - на существующей БД синхронизирует только системные шаблоны (created_by='system').
+    try:
+        with Session(engine) as db:
+            seeded_count = crud.seed_default_templates(db)
+        logger.info("Default templates synchronized: %s", seeded_count)
+    except Exception as exc:
+        logger.warning("Default templates sync failed during bootstrap: %s", exc)
+
     logger.info("Database bootstrap completed")
