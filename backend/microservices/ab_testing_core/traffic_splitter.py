@@ -50,18 +50,29 @@ class FixedTrafficSplitter:
         return boundaries
     
     def assign_variant(self, user_id: str, test_id: str = "") -> str:
+        return self.assign_variant_with_metadata(user_id=user_id, test_id=test_id)["variant"]
+
+    def assign_variant_with_metadata(self, user_id: str, test_id: str = "") -> Dict[str, Optional[float]]:
         hash_input = f"{test_id}:{user_id}:{self.seed}".encode('utf-8')
-        
+
         hash_digest = hashlib.sha256(hash_input).hexdigest()
-        
+
         hash_value = int(hash_digest, 16) % self.hash_space_size
-        
+
+        selected_variant = self.variants[-1].name
         for i, variant in enumerate(self.variants):
             if self.boundaries[i] <= hash_value < self.boundaries[i + 1]:
-                self.assignment_counts[variant.name] += 1
-                return variant.name
-        
-        return self.variants[-1].name
+                selected_variant = variant.name
+                break
+
+        self.assignment_counts[selected_variant] += 1
+        return {
+            "variant": selected_variant,
+            "hash_bucket": int(hash_value),
+            "hash_space_size": int(self.hash_space_size),
+            "seed": int(self.seed),
+            "splitter_type": "fixed",
+        }
     
     def get_assignment_stats(self) -> Dict[str, any]:
         total = sum(self.assignment_counts.values())
@@ -112,15 +123,24 @@ class AdaptiveTrafficSplitter:
         self.assignment_counts: Dict[str, int] = {v.name: 0 for v in variants}
     
     def assign_variant(self, user_id: str) -> str:
+        return self.assign_variant_with_metadata(user_id)["variant"]
+
+    def assign_variant_with_metadata(self, user_id: str) -> Dict[str, Optional[float]]:
         samples = {}
         for variant in self.variants:
             alpha = self.successes[variant.name]
             beta = self.failures[variant.name]
             samples[variant.name] = np.random.beta(alpha, beta)
-        
+
         selected = max(samples, key=samples.get)
         self.assignment_counts[selected] += 1
-        return selected
+        return {
+            "variant": selected,
+            "hash_bucket": None,
+            "hash_space_size": None,
+            "seed": None,
+            "splitter_type": "adaptive",
+        }
     
     def update(self, variant: str, reward: float):
         normalized_reward = max(0.0, min(1.0, reward))

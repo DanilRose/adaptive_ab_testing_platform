@@ -36,6 +36,9 @@ class SimulationConfig:
     traffic_split_strategy: str = "fixed" 
     enable_sequential_testing: bool = True
     enable_srm_check: bool = True
+    # В прод-сценарии чаще ожидается полный прогон по выбранному synthetic dataset.
+    # Early stopping оставляем как отдельный управляемый режим.
+    enable_early_stopping: bool = False
     max_sequential_looks: int = 5
     variant_effects: Optional[Dict[str, Dict[str, float]]] = None
 
@@ -550,14 +553,15 @@ class GoogleStandardABTestSimulator:
                 return True
 
     def _perform_interim_analysis(
-        self, 
+        self,
         users_processed: int
     ) -> Dict[str, Any]:
-        """Промежуточный анализ с Sequential Testing и SRM check"""
+        """Промежуточный анализ с Sequential Testing и SRM check."""
         test_config = self._get_test_config()
         variants = test_config['variants']
         control_variant = variants[0]
-        
+        metric_type = str(test_config.get('metric_type', 'continuous'))
+
         # 1. SRM Check
         srm_result = None
         if self.config.enable_srm_check and self.srm_checker:
@@ -566,62 +570,88 @@ class GoogleStandardABTestSimulator:
                 for v in variants
             }
             srm_result = self.srm_checker.check_srm_by_variant(variant_counts)
-            
+
             if srm_result.srm_detected:
                 print(f"\n{srm_result.warning}")
-        
+
         # 2. Statistical Test
-        control_data = np.array(self.results_by_variant.get(control_variant, []))
-        
+        control_data = np.array(self.results_by_variant.get(control_variant, []), dtype=float)
+
         results = {}
         for variant in variants[1:]:
-            treatment_data = np.array(self.results_by_variant.get(variant, []))
-            
+            treatment_data = np.array(self.results_by_variant.get(variant, []), dtype=float)
+
             if len(control_data) < 30 or len(treatment_data) < 30:
                 continue
-            
-            # Основной тест
-            test_result = self.analyzer.analyze_continuous_metric(
-                control_data,
-                treatment_data,
-                num_comparisons=len(variants) - 1
-            )
-            
+
+            # Основной тест выбирается по типу метрики
+            if metric_type == 'binary':
+                control_conv = int(np.sum(control_data))
+                treatment_conv = int(np.sum(treatment_data))
+                test_result = self.analyzer.analyze_binary_metric(
+                    control_conversions=control_conv,
+                    control_total=len(control_data),
+                    treatment_conversions=treatment_conv,
+                    treatment_total=len(treatment_data),
+                    num_comparisons=max(1, len(variants) - 1),
+                )
+            elif metric_type == 'ratio':
+                test_result = self.analyzer.analyze_ratio_metric(
+                    control_numerators=control_data,
+                    control_denominators=np.ones_like(control_data),
+                    treatment_numerators=treatment_data,
+                    treatment_denominators=np.ones_like(treatment_data),
+                    num_comparisons=max(1, len(variants) - 1),
+                )
+            else:
+                test_result = self.analyzer.analyze_continuous_metric(
+                    control_data,
+                    treatment_data,
+                    num_comparisons=max(1, len(variants) - 1),
+                )
+
             # Sequential Testing check
             can_stop = False
             stop_reason = None
-            
+
             if self.sequential_tester:
-                can_stop, stop_reason = self.sequential_tester.should_stop_for_success(
-                    test_result.p_value,
-                    test_result.relative_uplift_percent
-                )
-                
-                # Futility check
-                if not can_stop:
-                    mde_target = test_config['mde_percent']
-                    can_stop_fut, stop_reason_fut = self.sequential_tester.should_stop_for_futility(
-                        test_result.relative_uplift_percent / 100.0,
-                        mde_target / 100.0,
-                        users_processed,
-                        test_config['sample_size'] or self.config.user_count
+                # Early stopping разрешаем только при явном включении и после накопления
+                # достаточного объёма данных (минимум 50% плановой выборки и минимум 500 юзеров).
+                planned_users = int(test_config['sample_size'] or self.config.user_count or 0)
+                min_users_for_early_stop = max(500, int(planned_users * 0.5))
+                early_stop_allowed = bool(self.config.enable_early_stopping) and users_processed >= min_users_for_early_stop
+
+                if early_stop_allowed:
+                    can_stop, stop_reason = self.sequential_tester.should_stop_for_success(
+                        test_result.p_value,
+                        test_result.relative_uplift_percent,
                     )
-                    
-                    if can_stop_fut:
-                        can_stop = True
-                        stop_reason = stop_reason_fut
-            
+
+                    # Futility check
+                    if not can_stop:
+                        mde_target = test_config['mde_percent']
+                        can_stop_fut, stop_reason_fut = self.sequential_tester.should_stop_for_futility(
+                            test_result.relative_uplift_percent / 100.0,
+                            mde_target / 100.0,
+                            users_processed,
+                            test_config['sample_size'] or self.config.user_count,
+                        )
+
+                        if can_stop_fut:
+                            can_stop = True
+                            stop_reason = stop_reason_fut
+
             results[variant] = {
                 'test_result': test_result,
                 'can_stop_early': can_stop,
-                'stop_reason': stop_reason
+                'stop_reason': stop_reason,
             }
-        
+
         return {
             'users_processed': users_processed,
             'srm_result': srm_result,
             'variant_results': results,
-            'sequential_look': self.sequential_tester.current_look if self.sequential_tester else 0
+            'sequential_look': self.sequential_tester.current_look if self.sequential_tester else 0,
         }
     
     async def run_simulation(self) -> Dict[str, Any]:
@@ -876,7 +906,10 @@ class GoogleStandardABTestSimulator:
                 )
                 processed_users = int(results.get('users_processed', 0))
                 target_users = test.sample_size or self.config.user_count or processed_users or 1
-                test.completion_percentage = float(min(100.0, (processed_users / max(1, target_users)) * 100.0))
+                # После завершения симуляции тест должен отображаться как завершённый (100%),
+                # даже если завершение было досрочным. Факт ранней остановки хранится отдельно.
+                _ = target_users  # сохраняем вычисление для обратной совместимости логики
+                test.completion_percentage = 100.0 if processed_users > 0 else 0.0
 
 
                 if results['srm_check']:
@@ -914,6 +947,7 @@ async def run_ab_test_simulation(
         traffic_split_strategy=strategy,
         enable_sequential_testing=True,
         enable_srm_check=True,
+        enable_early_stopping=False,
         variant_effects=variant_effects
     )
     

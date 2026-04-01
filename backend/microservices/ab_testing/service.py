@@ -56,13 +56,25 @@ class ABSimulationOrchestrator:
 
         resolved_dataset_id = dataset_id or test.dataset_id
         if not resolved_dataset_id:
-            latest_dataset = crud.get_latest_generated_data_by_type(db, "synthetic")
-            if not latest_dataset:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Нет синтетических данных! Сначала сгенерируйте данные в GAN Manager или привяжите датасет к тесту.",
-                )
-            resolved_dataset_id = latest_dataset.id
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Для запуска симуляции требуется synthetic dataset. "
+                    "Сначала сгенерируйте данные через GAN и привяжите dataset_id к тесту."
+                ),
+            )
+
+        dataset = crud.get_generated_data_by_id(db, int(resolved_dataset_id))
+        if dataset is None:
+            raise HTTPException(status_code=400, detail=f"Датасет {resolved_dataset_id} не найден")
+        if dataset.data_type != "synthetic":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Датасет {resolved_dataset_id} имеет тип '{dataset.data_type}'. "
+                    "Для A/B симуляции разрешены только synthetic datasets."
+                ),
+            )
 
         resolved_user_count = int(user_count or test.sample_size or 1000)
         resolved_strategy = str(strategy or test.traffic_split_type or "fixed")
@@ -72,9 +84,19 @@ class ABSimulationOrchestrator:
         if resolved_variant_effects is None and test.extra_config:
             resolved_variant_effects = test.extra_config.get("variant_effects")
 
+        if dataset.sample_count < resolved_user_count:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Недостаточно синтетических данных в dataset {resolved_dataset_id}: "
+                    f"нужно {resolved_user_count}, доступно {dataset.sample_count}. "
+                    "Сгенерируйте больше данных через GAN или уменьшите sample_size/user_count."
+                ),
+            )
+
         return {
             "test": test,
-            "dataset_id": resolved_dataset_id,
+            "dataset_id": int(resolved_dataset_id),
             "user_count": resolved_user_count,
             "strategy": resolved_strategy,
             "simulation_minutes": resolved_minutes,

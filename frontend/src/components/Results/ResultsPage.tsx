@@ -58,6 +58,35 @@ interface TimeSeriesResponse {
   winner_confidence: 'low' | 'medium' | 'high';
   power_over_time: Array<Record<string, number>>;
   uplift_over_time: Array<Record<string, number>>;
+  analysis_mode?: 'fixed_experiment' | 'adaptive_bandit';
+  analysis_validity?: 'valid_for_inference' | 'exploration_only' | 'invalid_srm' | 'invalid_guardrails';
+  guardrails?: {
+    enabled: boolean;
+    passed: boolean;
+    failed_metrics: string[];
+    checks: Array<{
+      metric: string;
+      threshold: number;
+      direction: string;
+      observed: number;
+      passed: boolean;
+    }>;
+  };
+  p_values_corrected_latest?: Record<string, number>;
+  quality_gate?: {
+    status: 'green' | 'yellow' | 'red';
+    passed: boolean;
+    passed_checks: number;
+    total_checks: number;
+    checks: Array<{
+      id: string;
+      title: string;
+      passed: boolean;
+      actual: unknown;
+      threshold: unknown;
+      known?: boolean;
+    }>;
+  };
 }
 
 interface TestSummary {
@@ -95,11 +124,11 @@ const CHART_DESCRIPTIONS: Record<string, { title: string; description: string; w
     impact: 'Критически важен для оценки надёжности эксперимента. Позволяет понять, является ли наблюдаемый эффект случайным или реальным.',
   },
   pvalue: {
-    title: 'p-значение (уровень значимости)',
-    description: 'График изменения p-значения (вероятности ошибочно отвергнуть нулевую гипотезу) во времени. Показывает, насколько статистически значимы различия между вариантами.',
-    whatItShows: 'На оси X — количество пользователей. На оси Y — p-значение от 0 до 1. Красная пунктирная линия — порог значимости 0.05 (5%). Линии вариантов (B, C...) показывают p-значение сравнения с контрольным вариантом A.',
-    howToRead: 'Если линия p-значения опускается НИЖЕ красной линии 0.05 и остаётся там — различие статистически значимо с уровнем доверия 95%. Если линия колеблется вокруг 0.05 — результат нестабилен. Чем ниже p-значение, тем сильнее уверенность в наличии эффекта.',
-    impact: 'Является критерием принятия решения. p < 0.05 означает: "Мы с 95% уверенностью можем утверждать, что различие не случайно". Защищает от ложноположительных выводов.',
+    title: 'p-значение (raw, мониторинговое)',
+    description: 'График изменения сырого (некорректированного) p-значения во времени. Используется для мониторинга динамики, но не как основной критерий решения при множественных сравнениях.',
+    whatItShows: 'На оси X — количество пользователей. На оси Y — raw p-значение от 0 до 1. Красная пунктирная линия — порог 0.05. Линии вариантов (B, C...) показывают raw p-value сравнения с контрольным вариантом A.',
+    howToRead: 'Если raw p-value опускается ниже 0.05, это сигнал для внимания, но итоговое решение нужно принимать по скорректированным p-value (Holm-Bonferroni), особенно при 3+ вариантах.',
+    impact: 'Служит мониторингом хода теста. Для финального решения используйте скорректированные p-value (Holm), чтобы снизить риск ложноположительных выводов.',
   },
   uplift: {
     title: 'Прирост метрики относительно контроля',
@@ -452,7 +481,7 @@ export const ResultsPage: React.FC = () => {
     return (
       <>
         {renderChartDescription('pvalue')}
-        <Card title="p-значение (уровень значимости)" size="small" style={{ marginBottom: 16 }}>
+        <Card title="p-значение (raw, мониторинговое)" size="small" style={{ marginBottom: 16 }}>
           <ResponsiveContainer width="100%" height={380}>
             <LineChart data={pValueData}>
               <CartesianGrid strokeDasharray="3 3" />
@@ -625,11 +654,16 @@ export const ResultsPage: React.FC = () => {
       const variantMean = Number(variantData?.mean_metric ?? 0);
       const variantCum = Number(variantData?.cumulative_metric ?? 0);
       const variantSample = Number(variantData?.sample_size ?? 0);
-      const variantPValue = variantData?.p_value ?? null;
+      const variantPValueRaw = variantData?.p_value ?? null;
+      const variantPValueCorrected = variant === controlVariant
+        ? null
+        : (timeSeriesData?.p_values_corrected_latest?.[variant] ?? null);
 
       const uplift = controlMetric > 0
         ? ((variantMean - controlMetric) / controlMetric * 100)
         : 0;
+
+      const significanceSource = variantPValueCorrected ?? variantPValueRaw;
 
       return {
         variant,
@@ -637,8 +671,9 @@ export const ResultsPage: React.FC = () => {
         mean_metric: variantMean.toFixed(4),
         cumulative_metric: variantCum.toFixed(2),
         uplift: uplift.toFixed(2),
-        p_value: variantPValue !== null && variantPValue !== undefined ? Number(variantPValue).toFixed(4) : 'Н/Д',
-        significant: variantPValue !== null && variantPValue !== undefined && variantPValue < 0.05,
+        p_value_raw: variantPValueRaw !== null && variantPValueRaw !== undefined ? Number(variantPValueRaw).toFixed(4) : 'Н/Д',
+        p_value_corrected: variantPValueCorrected !== null && variantPValueCorrected !== undefined ? Number(variantPValueCorrected).toFixed(4) : 'Н/Д',
+        significant: significanceSource !== null && significanceSource !== undefined && significanceSource < 0.05,
         is_control: variant === controlVariant,
       };
     });
@@ -686,12 +721,21 @@ export const ResultsPage: React.FC = () => {
         },
       },
       {
-        title: 'p-значение',
-        dataIndex: 'p_value',
-        key: 'p_value',
+        title: 'p-value (Holm, corrected)',
+        dataIndex: 'p_value_corrected',
+        key: 'p_value_corrected',
         render: (v: string, record: any) => {
           if (record.is_control) return <Text type="secondary">—</Text>;
-          return <Text>{v}</Text>;
+          return <Text strong>{v}</Text>;
+        },
+      },
+      {
+        title: 'p-value (raw)',
+        dataIndex: 'p_value_raw',
+        key: 'p_value_raw',
+        render: (v: string, record: any) => {
+          if (record.is_control) return <Text type="secondary">—</Text>;
+          return <Text type="secondary">{v}</Text>;
         },
       },
       {
@@ -700,9 +744,9 @@ export const ResultsPage: React.FC = () => {
         render: (_: any, record: any) => {
           if (record.is_control) return <Tag color="default">Контроль</Tag>;
           return record.significant ? (
-            <Tag icon={<CheckCircleOutlined />} color="success">Значимо (p &lt; 0.05)</Tag>
+            <Tag icon={<CheckCircleOutlined />} color="success">Значимо (corrected p &lt; 0.05)</Tag>
           ) : (
-            <Tag icon={<WarningOutlined />} color="warning">Незначимо (p ≥ 0.05)</Tag>
+            <Tag icon={<WarningOutlined />} color="warning">Незначимо (corrected p ≥ 0.05)</Tag>
           );
         },
       },
@@ -728,8 +772,8 @@ export const ResultsPage: React.FC = () => {
               <Text style={{ fontSize: 12 }}>
                 <strong>Средняя метрика</strong> — среднее значение на пользователя для каждого варианта.
                 <strong> Прирост</strong> — процентный прирост относительно контроля (A).
-                <strong> p-значение &lt; 0.05</strong> — различие статистически значимо, то есть не случайно.
-                <strong> Значимо</strong> — можно с 95% уверенностью утверждать, что разница реальна.
+                <strong> corrected p-value (Holm) &lt; 0.05</strong> — основной критерий статистической значимости.
+                <strong> raw p-value</strong> — мониторинговый сигнал; в multi-variant сценариях не используется как финальный критерий решения.
               </Text>
             </div>
           }
@@ -847,6 +891,36 @@ export const ResultsPage: React.FC = () => {
             />
           )}
 
+          {timeSeriesData.analysis_mode === 'adaptive_bandit' && (
+            <Alert
+              style={{ marginBottom: 16 }}
+              type="warning"
+              showIcon
+              message="Режим adaptive_bandit"
+              description="Результаты используются как exploration-only. Для финального causal-решения требуется fixed_experiment."
+            />
+          )}
+
+          {timeSeriesData.analysis_validity && timeSeriesData.analysis_validity !== 'valid_for_inference' && (
+            <Alert
+              style={{ marginBottom: 16 }}
+              type="error"
+              showIcon
+              message={`Статус валидности: ${timeSeriesData.analysis_validity}`}
+              description="Автоматическая валидация пометила результаты как невалидные для итогового inference."
+            />
+          )}
+
+          {timeSeriesData.guardrails?.enabled && !timeSeriesData.guardrails?.passed && (
+            <Alert
+              style={{ marginBottom: 16 }}
+              type="error"
+              showIcon
+              message="Guardrails нарушены"
+              description={`Нарушенные метрики: ${(timeSeriesData.guardrails.failed_metrics || []).join(', ') || 'не указаны'}`}
+            />
+          )}
+
           {/* Ключевые метрики */}
           <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             <Col span={6}>
@@ -951,6 +1025,101 @@ export const ResultsPage: React.FC = () => {
             </Col>
           </Row>
 
+          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+            <Col span={24}>
+              <Card size="small" title="🚦 Quality Gate (валидность результата)">
+                {timeSeriesData.quality_gate ? (
+                  <>
+                    <Space style={{ marginBottom: 12 }} wrap>
+                      <Tag color={
+                        timeSeriesData.quality_gate.status === 'green'
+                          ? 'success'
+                          : timeSeriesData.quality_gate.status === 'red'
+                            ? 'error'
+                            : 'warning'
+                      }>
+                        Статус: {timeSeriesData.quality_gate.status.toUpperCase()}
+                      </Tag>
+                      <Tag color={timeSeriesData.quality_gate.passed ? 'success' : 'default'}>
+                        Пройдено: {timeSeriesData.quality_gate.passed_checks}/{timeSeriesData.quality_gate.total_checks}
+                      </Tag>
+                    </Space>
+
+                    <Table
+                      size="small"
+                      pagination={false}
+                      rowKey={(row: any) => row.id}
+                      dataSource={timeSeriesData.quality_gate.checks || []}
+                      columns={[
+                        {
+                          title: 'Проверка',
+                          dataIndex: 'title',
+                          key: 'title',
+                        },
+                        {
+                          title: 'Статус',
+                          key: 'passed',
+                          render: (_: any, row: any) => (
+                            <Tag color={row.passed ? 'success' : 'error'}>
+                              {row.passed ? 'PASS' : 'FAIL'}
+                            </Tag>
+                          ),
+                        },
+                        {
+                          title: 'Порог',
+                          dataIndex: 'threshold',
+                          key: 'threshold',
+                          render: (v: unknown) => <Text code>{typeof v === 'string' ? v : JSON.stringify(v)}</Text>,
+                        },
+                        {
+                          title: 'Факт',
+                          dataIndex: 'actual',
+                          key: 'actual',
+                          render: (v: unknown) => (
+                            <Text code style={{ whiteSpace: 'pre-wrap' }}>
+                              {typeof v === 'string' ? v : JSON.stringify(v)}
+                            </Text>
+                          ),
+                        },
+                      ]}
+                    />
+                  </>
+                ) : (
+                  <Text type="secondary">Quality gate ещё не рассчитан</Text>
+                )}
+              </Card>
+            </Col>
+
+            <Col span={12}>
+              <Card size="small" title="🧪 Режим анализа">
+                <Tag color={timeSeriesData.analysis_mode === 'adaptive_bandit' ? 'orange' : 'green'}>
+                  {timeSeriesData.analysis_mode || 'fixed_experiment'}
+                </Tag>
+                <div style={{ marginTop: 8 }}>
+                  <Text>Валидность inference: </Text>
+                  <Tag color={timeSeriesData.analysis_validity === 'valid_for_inference' ? 'success' : 'error'}>
+                    {timeSeriesData.analysis_validity || 'unknown'}
+                  </Tag>
+                </div>
+              </Card>
+            </Col>
+            <Col span={12}>
+              <Card size="small" title="📉 Скорректированные p-value (Holm)">
+                {Object.keys(timeSeriesData.p_values_corrected_latest || {}).length === 0 ? (
+                  <Text type="secondary">Нет данных</Text>
+                ) : (
+                  <Space wrap>
+                    {Object.entries(timeSeriesData.p_values_corrected_latest || {}).map(([variant, p]) => (
+                      <Tag key={variant} color={p < 0.05 ? 'success' : 'default'}>
+                        {variant}: {p.toFixed(4)}
+                      </Tag>
+                    ))}
+                  </Space>
+                )}
+              </Card>
+            </Col>
+          </Row>
+
           {/* Переключатель графиков */}
           <Card style={{ marginBottom: 16 }}>
             <Row gutter={[16, 16]} align="middle" wrap>
@@ -966,7 +1135,7 @@ export const ResultsPage: React.FC = () => {
                   <Option value="cumulative">📈 Накопленная метрика</Option>
                   <Option value="mean">📊 Средняя метрика</Option>
                   <Option value="ci">🎯 Доверительные интервалы (ДИ)</Option>
-                  <Option value="pvalue">📉 p-значение (уровень значимости)</Option>
+                  <Option value="pvalue">📉 p-значение (raw, мониторинг)</Option>
                   <Option value="uplift">🚀 Прирост относительно контроля</Option>
                   <Option value="power">⚡ Статистическая мощность</Option>
                   <Option value="traffic">🛣️ Распределение трафика</Option>

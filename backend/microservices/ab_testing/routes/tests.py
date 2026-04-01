@@ -3,11 +3,12 @@
 from typing import Dict, List, Optional
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session
 
 from backend.microservices.ab_testing_core.core import MetricType, TestConfig
+from backend.microservices.ab_testing_core.statistics import SampleSizeCalculator
 from backend.microservices.ab_testing.service import ABPlatformProvider
 from backend.microservices.auth_core.models import User
 from backend.microservices.auth_core.service import get_current_user, require_role
@@ -30,16 +31,31 @@ class TestCreateRequest(BaseModel):
     confidence_level: float = Field(0.95, ge=0.8, le=0.99, description="Уровень доверия")
     power: float = Field(0.8, ge=0.5, le=0.95, description="Мощность теста")
     min_effect_size: float = Field(0.1, ge=0.01, le=1.0, description="Минимальный размер эффекта")
-    dataset_id: Optional[int] = Field(None, description="ID синтетического датасета")
+    dataset_id: int = Field(..., description="ID синтетического датасета")
     simulation_user_count: Optional[int] = Field(None, ge=100, description="Количество пользователей для симуляции")
     simulation_duration_minutes: Optional[int] = Field(None, ge=1, le=180, description="Длительность симуляции в минутах")
     traffic_split_type: str = Field("fixed", description="Стратегия трафика: fixed | adaptive")
     variant_effects: Optional[Dict] = Field(None, description="Эффекты вариантов, например: {'B': {'conversion': 1.15}}")
+    analysis_mode: str = Field("fixed_experiment", description="Режим анализа: fixed_experiment | adaptive_bandit")
+    guardrails_config: Optional[Dict] = Field(
+        None,
+        description=(
+            "Guardrails-конфиг, например: "
+            "{'latency_ms': {'threshold': 5, 'direction': 'max_increase'}}"
+        ),
+    )
 
     @validator("variants")
     def validate_variants(cls, v):
         if not isinstance(v, list):
             raise ValueError(f"Variants must be list, got {type(v)}")
+        return v
+
+    @validator("analysis_mode")
+    def validate_analysis_mode(cls, v: str):
+        allowed = {"fixed_experiment", "adaptive_bandit"}
+        if v not in allowed:
+            raise ValueError(f"analysis_mode должен быть одним из: {', '.join(sorted(allowed))}")
         return v
 
 
@@ -52,6 +68,7 @@ class MetricRecordRequest(BaseModel):
     session_id: str = Field(..., description="ID сессии")
     metric_name: str = Field(..., description="Название метрики")
     value: float = Field(..., description="Значение метрики")
+    event_id: Optional[str] = Field(None, description="Уникальный ID события для идемпотентности")
 
 
 class SessionCompleteRequest(BaseModel):
@@ -79,6 +96,66 @@ class StartSimulationRequest(BaseModel):
     variant_effects: Optional[Dict] = Field(None, description="Эффекты вариантов: {'B': {'conversion': 1.15}} = +15% к конверсии")
 
 
+class TestArchiveRequest(BaseModel):
+    reason: Optional[str] = Field(None, description="Причина архивирования")
+
+
+def _default_baseline_for_metric(metric_type: MetricType, primary_metric: str) -> tuple[float, float]:
+    pm = (primary_metric or "").lower()
+
+    if metric_type == MetricType.BINARY:
+        # Типичный baseline для conversion-like метрик
+        return 0.10, 0.30
+
+    # Небольшие эвристики для непрерывных/ratio метрик
+    if any(k in pm for k in ["revenue", "gmv", "amount", "income"]):
+        return 100.0, 60.0
+    if any(k in pm for k in ["ctr", "cr", "rate", "ratio"]):
+        return 0.10, 0.10
+
+    return 1.0, 1.0
+
+
+def _resolve_sample_size(
+    *,
+    metric_type: MetricType,
+    primary_metric: str,
+    explicit_sample_size: Optional[int],
+    min_effect_size_fraction: float,
+    confidence_level: float,
+    power: float,
+) -> int:
+    if explicit_sample_size and explicit_sample_size > 0:
+        return int(explicit_sample_size)
+
+    alpha = max(1e-6, 1.0 - float(confidence_level))
+    mde_percent = max(0.1, float(min_effect_size_fraction) * 100.0)
+
+    baseline_mean, baseline_std = _default_baseline_for_metric(metric_type, primary_metric)
+
+    if metric_type == MetricType.BINARY:
+        return int(
+            SampleSizeCalculator.calculate_sample_size_for_binary(
+                baseline_conversion=max(1e-4, min(0.99, baseline_mean)),
+                mde_percent=mde_percent,
+                alpha=alpha,
+                power=float(power),
+            )
+        )
+
+    # Для continuous/ratio используем общий расчёт по MDE%
+    return int(
+        SampleSizeCalculator.calculate_sample_size(
+            baseline_mean=max(1e-6, baseline_mean),
+            baseline_std=max(1e-6, baseline_std),
+            mde_percent=mde_percent,
+            alpha=alpha,
+            power=float(power),
+            two_tailed=True,
+        )
+    )
+
+
 @router.post("/", summary="Создать новый A/B тест")
 async def create_test(
     request: TestCreateRequest,
@@ -95,12 +172,40 @@ async def create_test(
         if not all(isinstance(v, str) for v in request.variants):
             raise ValueError("Все варианты должны быть строками")
 
+        metric_type = MetricType(request.metric_type)
+        resolved_sample_size = _resolve_sample_size(
+            metric_type=metric_type,
+            primary_metric=request.primary_metric,
+            explicit_sample_size=request.sample_size,
+            min_effect_size_fraction=request.min_effect_size,
+            confidence_level=request.confidence_level,
+            power=request.power,
+        )
+
+        dataset = crud.get_generated_data_by_id(db, int(request.dataset_id))
+        if dataset is None:
+            raise ValueError(f"Датасет {request.dataset_id} не найден")
+        if dataset.data_type != "synthetic":
+            raise ValueError(
+                f"Датасет {request.dataset_id} имеет тип '{dataset.data_type}'. Для A/B тестов разрешены только synthetic datasets"
+            )
+        # Если расчётный sample_size превышает размер датасета — автоматически ограничиваем.
+        # Минимум 200 записей необходимо для статистически значимого результата.
+        if dataset.sample_count < 200:
+            raise ValueError(
+                f"Датасет {request.dataset_id} слишком мал: доступно {dataset.sample_count} записей, "
+                f"минимум 200 для A/B теста."
+            )
+        if resolved_sample_size > dataset.sample_count:
+            # Автоматически снижаем sample_size до размера датасета
+            resolved_sample_size = dataset.sample_count
+
         config = TestConfig(
             test_id=test_id,
             variants=request.variants,
             primary_metric=request.primary_metric,
-            metric_type=MetricType(request.metric_type),
-            sample_size=request.sample_size,
+            metric_type=metric_type,
+            sample_size=resolved_sample_size,
             confidence_level=request.confidence_level,
             power=request.power,
             min_effect_size=request.min_effect_size,
@@ -118,16 +223,19 @@ async def create_test(
             variants=request.variants,
             primary_metric=request.primary_metric,
             metric_type=request.metric_type,
-            sample_size=request.sample_size,
+            sample_size=resolved_sample_size,
             confidence_level=request.confidence_level,
             power=request.power,
             min_effect_size=request.min_effect_size,
             dataset_id=request.dataset_id,
             simulation_duration_minutes=request.simulation_duration_minutes or 20,
             traffic_split_type=request.traffic_split_type,
+            analysis_mode=request.analysis_mode,
+            analysis_validity=("exploration_only" if request.analysis_mode == "adaptive_bandit" or request.traffic_split_type == "adaptive" else "valid_for_inference"),
             created_by_user_id=current_user.id,
             status="prepared",  # Новый тест создается в статусе "prepared"
             extra_config={"variant_effects": request.variant_effects} if request.variant_effects else None,
+            guardrails_config=request.guardrails_config,
         )
 
         return {
@@ -169,15 +277,18 @@ async def record_metric(
     current_user: User = Depends(require_role("developer", "analyst")),
 ):
     try:
-        platform.record_user_metric(
+        record_result = platform.record_user_metric(
             session_id=request.session_id,
             metric_name=request.metric_name,
             value=request.value,
+            event_id=request.event_id,
         )
 
         return {
-            "status": "recorded",
-            "message": f"Метрика '{request.metric_name}' записана для сессии {request.session_id}",
+            "status": "recorded" if record_result.get("deduplicated") is not True else "duplicate_ignored",
+            "deduplicated": bool(record_result.get("deduplicated", False)),
+            "event_id": record_result.get("event_id"),
+            "message": f"Метрика '{request.metric_name}' обработана для сессии {request.session_id}",
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -226,7 +337,6 @@ async def stop_test(
 ):
     try:
         result = platform.stop_test(test_id, request.reason)
-        crud.update_ab_test_status(db, test_id=test_id, status="archived")
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -260,6 +370,10 @@ async def get_all_tests_endpoint(
                 "variants": t.variants,
                 "primary_metric": t.primary_metric,
                 "metric_type": t.metric_type,
+                "analysis_mode": t.analysis_mode,
+                "analysis_validity": t.analysis_validity,
+                "guardrails_status": t.guardrails_status,
+                "dataset_id": t.dataset_id,
                 "sample_size": t.sample_size,
                 "confidence_level": t.confidence_level,
                 "power": t.power,
@@ -468,15 +582,18 @@ async def delete_test_with_option(
 @router.post("/{test_id}/archive", summary="Переместить тест в архив")
 async def archive_test(
     test_id: str,
-    reason: Optional[str] = None,
+    request: Optional[TestArchiveRequest] = None,
+    reason: Optional[str] = Query(None, description="Причина архивирования (legacy query-param)"),
     current_user: User = Depends(require_role("developer", "analyst")),
     db: Session = Depends(get_db),
 ):
     """
     Перемещает тест в архив.
+    Поддерживает reason как в body, так и в query (backward compatibility).
     """
     try:
-        result = ABTestLifecycleService.archive_test(db, test_id=test_id, reason=reason)
+        final_reason = (request.reason if request and request.reason is not None else reason)
+        result = ABTestLifecycleService.archive_test(db, test_id=test_id, reason=final_reason)
         print(f"🗄️ Test {test_id} archived by user {current_user.username}")
         return result
     except HTTPException:

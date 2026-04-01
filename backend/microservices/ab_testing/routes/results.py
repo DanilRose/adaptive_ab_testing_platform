@@ -15,6 +15,7 @@ from backend.microservices.database import crud
 from backend.microservices.database.models import ABTestORM
 from backend.microservices.ab_testing_core.statistics import StatisticalAnalyzer
 from backend.microservices.data_gan.service import DatasetPersistenceService
+from backend.microservices.ab_testing_core.decision_engine import ABDecisionEngine
 
 router = APIRouter(prefix="/api/v1/results", tags=["Results & Analytics"])
 platform = ABPlatformProvider.get()
@@ -218,6 +219,15 @@ async def get_time_series_chart_data(
         if not test:
             raise HTTPException(status_code=404, detail="Тест не найден")
 
+        db_centric_results = platform.get_test_results(test_id)
+        quality_gate = db_centric_results.get("quality_gate") or {
+            "status": "yellow",
+            "passed": False,
+            "passed_checks": 0,
+            "total_checks": 5,
+            "checks": [],
+        }
+
         if not time_series_records:
             return {
                 "test_id": test_id,
@@ -234,6 +244,11 @@ async def get_time_series_chart_data(
                 "traffic_split": {"variant_counts": {}, "variant_percentages": {}},
                 "winner": None,
                 "winner_confidence": "low",
+                "analysis_mode": test.analysis_mode,
+                "analysis_validity": test.analysis_validity,
+                "guardrails": test.guardrails_status,
+                "p_values_corrected_latest": {},
+                "quality_gate": quality_gate,
             }
 
         chart_data: List[Dict[str, Any]] = []
@@ -261,6 +276,17 @@ async def get_time_series_chart_data(
             if row.variant == control_variant:
                 control_mean = float(row.mean_metric)
 
+        raw_latest_p_values: Dict[str, float] = {}
+        for v in variants:
+            if v == control_variant:
+                continue
+            row = latest_by_variant.get(v)
+            if not row:
+                continue
+            raw_latest_p_values[v] = float(row.p_value) if row.p_value is not None else 1.0
+
+        corrected_latest_p_values = ABDecisionEngine.holm_bonferroni_correction(raw_latest_p_values)
+
         winner = None
         best_uplift = -1e18
         winner_confidence = "low"
@@ -271,10 +297,11 @@ async def get_time_series_chart_data(
             if not row:
                 continue
             uplift = ((row.mean_metric - control_mean) / control_mean * 100.0) if control_mean != 0 else 0.0
-            p_val = row.p_value if row.p_value is not None else 1.0
+            p_val_corrected = corrected_latest_p_values.get(v, 1.0)
 
-            # Победителя определяем только среди статистически значимых вариантов.
-            if p_val < 0.05 and uplift > best_uplift:
+            # Победителя определяем только среди статистически значимых вариантов
+            # с учетом коррекции множественных сравнений.
+            if p_val_corrected < 0.05 and uplift > best_uplift:
                 best_uplift = uplift
                 winner = v
                 winner_confidence = "high"
@@ -379,6 +406,11 @@ async def get_time_series_chart_data(
             "winner_confidence": winner_confidence,
             "power_over_time": power_over_time,
             "uplift_over_time": uplift_over_time,
+            "analysis_mode": test.analysis_mode,
+            "analysis_validity": test.analysis_validity,
+            "guardrails": test.guardrails_status,
+            "p_values_corrected_latest": corrected_latest_p_values,
+            "quality_gate": quality_gate,
         }
 
     except HTTPException:

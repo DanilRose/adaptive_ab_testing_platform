@@ -65,6 +65,7 @@ class ABTestORM(Base):
     variants: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     primary_metric: Mapped[str] = mapped_column(String(128), nullable=False)
     metric_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    analysis_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="fixed_experiment")  # fixed_experiment | adaptive_bandit
     sample_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     confidence_level: Mapped[float] = mapped_column(Float, nullable=False, default=0.95)
     power: Mapped[float] = mapped_column(Float, nullable=False, default=0.8)
@@ -95,6 +96,11 @@ class ABTestORM(Base):
 
     # Дополнительная конфигурация теста (например, variant_effects для симуляции)
     extra_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    # Guardrails и валидность статистического вывода
+    guardrails_config: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    guardrails_status: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    analysis_validity: Mapped[str] = mapped_column(String(32), nullable=False, default="valid_for_inference")
 
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
@@ -134,6 +140,65 @@ class ABTestORM(Base):
     )
 
     __table_args__ = ()
+
+
+class AssignmentAuditORM(Base):
+    __tablename__ = "assignment_audit"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    test_id: Mapped[str] = mapped_column(String(64), ForeignKey("ab_tests.test_id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    variant: Mapped[str] = mapped_column(String(32), nullable=False)
+    splitter_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    analysis_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    traffic_split_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    hash_bucket: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hash_space_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assignment_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class UserAssignmentORM(Base):
+    __tablename__ = "user_assignments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    test_id: Mapped[str] = mapped_column(String(64), ForeignKey("ab_tests.test_id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    variant: Mapped[str] = mapped_column(String(32), nullable=False)
+    splitter_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    hash_bucket: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hash_space_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    assignment_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("test_id", "user_id", name="uq_user_assignments_test_user"),
+    )
+
+
+class MetricEventORM(Base):
+    __tablename__ = "metric_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    event_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True, index=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    test_id: Mapped[str] = mapped_column(String(64), ForeignKey("ab_tests.test_id", ondelete="CASCADE"), nullable=False, index=True)
+    metric_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_metric_events_session_metric", "session_id", "metric_name"),
+    )
 
 
 class GeneratedDataORM(Base):

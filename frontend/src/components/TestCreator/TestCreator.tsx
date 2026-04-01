@@ -41,6 +41,8 @@ export const TestCreator: React.FC = () => {
   // Хранит variantEffects из применённого шаблона
   const [appliedVariantEffects, setAppliedVariantEffects] = useState<Record<string, any> | null>(null);
 
+  const [analysisMode, setAnalysisMode] = useState<'fixed_experiment' | 'adaptive_bandit'>('fixed_experiment');
+
   useEffect(() => {
     const loadDatasets = async () => {
       try {
@@ -72,21 +74,47 @@ export const TestCreator: React.FC = () => {
   };
 
   const applyTemplate = (template: Template) => {
-    const cfg = template.config_json;
+    const cfg = template.config_json || {};
+
+    const pick = <T,>(...keys: string[]): T | undefined => {
+      for (const key of keys) {
+        if (cfg[key] !== undefined && cfg[key] !== null) {
+          return cfg[key] as T;
+        }
+      }
+      return undefined;
+    };
+
+    const rawVariants = pick<any>('variants', 'variant_list');
+    const normalizedVariants = Array.isArray(rawVariants)
+      ? rawVariants.join(', ')
+      : (rawVariants || 'A, B');
+
+    const trafficSplitType = pick<string>('trafficSplitType', 'traffic_split_type') || 'fixed';
+    const resolvedAnalysisMode =
+      pick<'fixed_experiment' | 'adaptive_bandit'>('analysisMode', 'analysis_mode') ||
+      (trafficSplitType === 'adaptive' ? 'adaptive_bandit' : 'fixed_experiment');
+
+    const guardrailsConfig = pick<Record<string, any>>('guardrailsConfig', 'guardrails_config');
+
     form.setFieldsValue({
-      testName: cfg.testName || '',
-      variants: cfg.variants || 'A, B',
-      primaryMetric: cfg.primaryMetric || '',
-      metricType: cfg.metricType || 'continuous',
-      description: cfg.description || '',
-      confidenceLevel: cfg.confidenceLevel ?? 0.95,
-      power: cfg.power ?? 0.8,
-      minEffectSize: cfg.minEffectSize ?? 0.1,
-      trafficSplitType: cfg.trafficSplitType || 'fixed',
-      simulationDurationMinutes: cfg.simulationDurationMinutes ?? 20,
-      sampleSize: cfg.sampleSize ?? undefined,
+      testName: pick<string>('testName', 'test_name') || '',
+      variants: normalizedVariants,
+      primaryMetric: pick<string>('primaryMetric', 'primary_metric') || '',
+      metricType: pick<string>('metricType', 'metric_type') || 'continuous',
+      description: pick<string>('description') || '',
+      confidenceLevel: pick<number>('confidenceLevel', 'confidence_level') ?? 0.95,
+      power: pick<number>('power') ?? 0.8,
+      minEffectSize: pick<number>('minEffectSize', 'min_effect_size') ?? 0.1,
+      trafficSplitType,
+      simulationDurationMinutes: pick<number>('simulationDurationMinutes', 'simulation_duration_minutes') ?? 20,
+      sampleSize: pick<number>('sampleSize', 'sample_size') ?? undefined,
+      analysisMode: resolvedAnalysisMode,
+      guardrailsConfigJson: guardrailsConfig ? JSON.stringify(guardrailsConfig, null, 2) : undefined,
     });
-    setAppliedVariantEffects(cfg.variantEffects || null);
+
+    setAnalysisMode(resolvedAnalysisMode);
+    setAppliedVariantEffects(pick<Record<string, any>>('variantEffects', 'variant_effects') || null);
     setAppliedTemplate(template.name);
     setTemplateModal(false);
     message.success(`Шаблон "${template.name}" применён`);
@@ -151,6 +179,17 @@ export const TestCreator: React.FC = () => {
         return;
       }
 
+      let guardrailsConfig: Record<string, any> | null = null;
+      if (values.guardrailsConfigJson && String(values.guardrailsConfigJson).trim().length > 0) {
+        try {
+          guardrailsConfig = JSON.parse(values.guardrailsConfigJson);
+        } catch {
+          throw new Error('Некорректный JSON в guardrails-конфиге');
+        }
+      }
+
+      const resolvedAnalysisMode = values.analysisMode || (values.trafficSplitType === 'adaptive' ? 'adaptive_bandit' : 'fixed_experiment');
+
       const testData = {
         test_name: values.testName,
         variants: variantsArray,
@@ -165,6 +204,8 @@ export const TestCreator: React.FC = () => {
         simulation_duration_minutes: values.simulationDurationMinutes || 20,
         traffic_split_type: values.trafficSplitType || 'fixed',
         variant_effects: appliedVariantEffects,
+        analysis_mode: resolvedAnalysisMode,
+        guardrails_config: guardrailsConfig,
       };
 
       const response = await abTestAPI.createTest(testData);
@@ -220,6 +261,7 @@ export const TestCreator: React.FC = () => {
           variants: 'A, B',
           trafficSplitType: 'fixed',
           simulationDurationMinutes: 20,
+          analysisMode: 'fixed_experiment',
         }}
       >
         <Form.Item
@@ -328,7 +370,8 @@ export const TestCreator: React.FC = () => {
         <Form.Item
           name="datasetId"
           label="Синтетический датасет"
-          tooltip="Опционально: сразу привязать датасет для симуляции"
+          rules={[{ required: true, message: 'Выберите синтетический датасет (GAN)' }]}
+          tooltip="Обязательно: A/B тест запускается только на выбранном synthetic dataset"
         >
           <Select allowClear placeholder="Выберите датасет">
             {datasets.map((ds: any) => (
@@ -348,6 +391,38 @@ export const TestCreator: React.FC = () => {
             <Option value="fixed">fixed — равномерное разделение (рекомендуется)</Option>
             <Option value="adaptive">adaptive — адаптивное разделение</Option>
           </Select>
+        </Form.Item>
+
+        <Form.Item
+          name="analysisMode"
+          label="Режим анализа"
+          tooltip="fixed_experiment — валидный causal inference; adaptive_bandit — исследовательский режим"
+        >
+          <Select onChange={(v) => setAnalysisMode(v)}>
+            <Option value="fixed_experiment">fixed_experiment — продуктовый A/B inference</Option>
+            <Option value="adaptive_bandit">adaptive_bandit — exploration only</Option>
+          </Select>
+        </Form.Item>
+
+        {(analysisMode === 'adaptive_bandit' || form.getFieldValue('trafficSplitType') === 'adaptive') && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="Adaptive/Bandit режим"
+            description="Классические p-value/доверительные интервалы в этом режиме не являются валидными для финального causal-решения. Используйте fixed_experiment для финальной валидации гипотезы."
+          />
+        )}
+
+        <Form.Item
+          name="guardrailsConfigJson"
+          label="Guardrails конфиг (JSON, опционально)"
+          tooltip={'Пример: {"latency_ms": {"threshold": 5, "direction": "max_increase"}}'}
+        >
+          <Input.TextArea
+            rows={5}
+            placeholder='{"latency_ms": {"threshold": 5, "direction": "max_increase"}}'
+          />
         </Form.Item>
 
         <Form.Item
@@ -374,7 +449,7 @@ export const TestCreator: React.FC = () => {
         <ul style={{ margin: 0, paddingLeft: '20px' }}>
           <li>Первый вариант (A) всегда считается контрольным</li>
           <li>Для финальной валидации гипотез используйте стратегию <strong>fixed</strong></li>
-          <li>Если датасет не выбран, при запуске симуляции будет использован последний доступный синтетический датасет</li>
+          <li>Для создания теста обязательно выберите синтетический датасет (GAN)</li>
           <li>MDE 0.05 = вы хотите обнаружить эффект от 5% и выше</li>
         </ul>
       </div>

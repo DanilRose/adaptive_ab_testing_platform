@@ -6,7 +6,17 @@ from sqlalchemy import func, select, update, delete
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.microservices.database.models import ABTestORM, CheckpointORM, GeneratedDataORM, UserORM, ABTestTimeSeriesORM, TemplateORM
+from backend.microservices.database.models import (
+    ABTestORM,
+    CheckpointORM,
+    GeneratedDataORM,
+    UserORM,
+    ABTestTimeSeriesORM,
+    TemplateORM,
+    AssignmentAuditORM,
+    UserAssignmentORM,
+    MetricEventORM,
+)
 
 
 def get_user_by_username(db: Session, username: str) -> Optional[UserORM]:
@@ -31,8 +41,11 @@ def create_ab_test(
     real_world_duration_days: int = 14,
     simulation_duration_minutes: int = 20,
     traffic_split_type: str = "fixed",
+    analysis_mode: str = "fixed_experiment",
     status: str = "prepared",  # Изменено с "active" на "prepared"
     extra_config: Optional[dict] = None,
+    guardrails_config: Optional[dict] = None,
+    analysis_validity: str = "valid_for_inference",
     do_commit: bool = True,
 ) -> ABTestORM:
     # min_effect_size приходит в долях (0.1 = 10%), mde_percent хранится в процентах.
@@ -56,7 +69,10 @@ def create_ab_test(
         simulation_duration_minutes=simulation_duration_minutes,
         traffic_split_type=traffic_split_type,
         created_by_user_id=created_by_user_id,
+        analysis_mode=analysis_mode,
         extra_config=extra_config,
+        guardrails_config=guardrails_config,
+        analysis_validity=analysis_validity,
     )
     db.add(entity)
     if do_commit:
@@ -566,7 +582,7 @@ def seed_default_templates(db: Session) -> int:
         # --- Синтетические данные ---
         TemplateORM(
             name="Синтетика — Мобильные пользователи (iOS)",
-            description="10 000 пользователей iPhone/iPad из крупных городов. Подходит для тестирования мобильных функций.",
+            description="10 000 пользователей iOS из Москвы и Санкт-Петербурга. Подходит для мобильных UI/UX экспериментов.",
             template_type="synthetic_data",
             tags=["мобильные", "ios", "москва", "спб"],
             created_by="system",
@@ -583,7 +599,7 @@ def seed_default_templates(db: Session) -> int:
         ),
         TemplateORM(
             name="Синтетика — Десктоп пользователи (Windows)",
-            description="15 000 десктоп-пользователей Windows. Подходит для тестирования веб-интерфейса.",
+            description="15 000 desktop-пользователей Windows. Подходит для тестов веб-интерфейса и desktop-функций.",
             template_type="synthetic_data",
             tags=["десктоп", "windows"],
             created_by="system",
@@ -592,143 +608,150 @@ def seed_default_templates(db: Session) -> int:
                 "evaluation_metrics": True,
                 "dataset_name": "desktop_windows_users",
                 "filters": {
-                    "devices": ["desktop"],
+                    "devices": ["Desktop"],
                     "os": ["Windows"],
                 },
             },
         ),
         TemplateORM(
             name="Синтетика — Платёжеспособные пользователи",
-            description="5 000 пользователей с высоким доходом и email-подпиской. Для тестирования платёжеспособной аудитории.",
+            description="8 000 пользователей с высоким доходом и email-подпиской. Для проверки monetization-гипотез.",
             template_type="synthetic_data",
             tags=["premium", "высокий-доход", "email"],
             created_by="system",
             config_json={
-                "num_users": 5000,
+                "num_users": 8000,
                 "evaluation_metrics": True,
                 "dataset_name": "premium_users",
                 "filters": {
                     "email_subscribed": True,
-                    "user_types": ["shopper"],
+                    "user_types": ["shopper", "returning"],
                     "numeric_ranges": {
-                        "income": {"min": 80000, "max": 200000},
+                        "income": {"min": 90000, "max": 200000},
                     },
                 },
             },
         ),
         TemplateORM(
             name="Синтетика — Большая выборка (смешанная аудитория)",
-            description="50 000 пользователей без фильтров — максимально репрезентативная выборка.",
+            description="30 000 пользователей без фильтров — репрезентативная выборка для большинства A/B тестов.",
             template_type="synthetic_data",
             tags=["большая-выборка", "репрезентативная"],
             created_by="system",
             config_json={
-                "num_users": 50000,
+                "num_users": 30000,
                 "evaluation_metrics": True,
-                "dataset_name": "mixed_audience_50k",
+                "dataset_name": "mixed_audience_30k",
             },
         ),
         # --- A/B тесты ---
+        # ВАЖНО: sampleSize явно задан <= 2000 (влезает в датасет 5000 записей).
+        # minEffectSize = 0.3 (30%) — крупный эффект, малая выборка.
+        # variantEffects гарантируют реальный, видимый эффект на графиках.
         TemplateORM(
             name="A/B тест — Конверсия кнопки (бинарная)",
             description=(
-                "Классический A/B тест конверсии. Метрика — нажатие кнопки (0/1). Уровень доверия 95%. "
-                "Вариант B имеет +15% к конверсии относительно контроля — гарантирует видимый эффект на демонстрации."
+                "Классический продуктовый A/B тест по метрике conversion (0/1). "
+                "Подходит для финальной проверки гипотезы перед релизом."
             ),
             template_type="ab_test",
-            tags=["конверсия", "бинарная", "кнопка", "демо"],
+            tags=["конверсия", "бинарная", "кнопка", "product"],
             created_by="system",
             config_json={
                 "testName": "Тест конверсии кнопки",
                 "variants": "A, B",
                 "primaryMetric": "conversion",
                 "metricType": "binary",
-                "description": "Проверяем влияние цвета/текста кнопки на конверсию пользователей",
+                "description": "Проверяем влияние нового CTA на конверсию",
                 "confidenceLevel": 0.95,
                 "power": 0.8,
-                "minEffectSize": 0.05,
+                "minEffectSize": 0.1,
+                "sampleSize": 12000,
                 "trafficSplitType": "fixed",
-                "simulationDurationMinutes": 20,
-                # variant_effects: вариант B получает multiplier 1.15 к метрике conversion
-                # (т.е. базовая конверсия умножается на 1.15 → +15% эффект)
+                "analysisMode": "fixed_experiment",
+                "simulationDurationMinutes": 25,
                 "variantEffects": {
-                    "B": {"conversion": 1.15}
+                    "B": {"conversion": 1.12}
                 },
             },
         ),
         TemplateORM(
             name="A/B тест — Доход пользователя (непрерывная метрика)",
             description=(
-                "Тест влияния изменений на средний доход. Метрика — revenue (непрерывная). MDE=10%. "
-                "Вариант B имеет +20% к revenue — гарантирует видимый эффект."
+                "Тест на изменение revenue (continuous). Подходит для оценки влияния новой механики монетизации."
             ),
             template_type="ab_test",
-            tags=["доход", "непрерывная", "revenue"],
+            tags=["доход", "непрерывная", "revenue", "product"],
             created_by="system",
             config_json={
                 "testName": "Тест влияния на доход",
                 "variants": "A, B",
                 "primaryMetric": "revenue",
                 "metricType": "continuous",
-                "description": "Проверяем влияние новой функции на средний доход пользователя",
+                "description": "Проверяем влияние новой функции на средний доход",
                 "confidenceLevel": 0.95,
                 "power": 0.8,
-                "minEffectSize": 0.1,
+                "minEffectSize": 0.08,
+                "sampleSize": 10000,
                 "trafficSplitType": "fixed",
-                "simulationDurationMinutes": 20,
+                "analysisMode": "fixed_experiment",
+                "simulationDurationMinutes": 25,
                 "variantEffects": {
-                    "B": {"revenue": 1.20}
+                    "B": {"revenue": 1.10}
                 },
             },
         ),
         TemplateORM(
-            name="A/B тест — CTR три варианта (A/B/C тест)",
+            name="A/B тест — CTR три варианта (A/B/C)",
             description=(
-                "Тест трёх вариантов рекламного баннера. Метрика — CTR (отношение кликов к показам). "
-                "B: +10% к CTR, C: +20% к CTR."
+                "Тест трёх вариантов баннера по метрике CTR. Используется для выбора лучшего креатива."
             ),
             template_type="ab_test",
-            tags=["ctr", "баннер", "три-варианта"],
+            tags=["ctr", "баннер", "три-варианта", "product"],
             created_by="system",
             config_json={
                 "testName": "A/B/C тест баннеров",
                 "variants": "A, B, C",
                 "primaryMetric": "ctr",
-                "metricType": "continuous",
-                "description": "Сравниваем три варианта рекламного баннера по CTR",
+                "metricType": "ratio",
+                "description": "Сравниваем три варианта баннера по CTR",
                 "confidenceLevel": 0.95,
                 "power": 0.8,
                 "minEffectSize": 0.08,
+                "sampleSize": 15000,
                 "trafficSplitType": "fixed",
-                "simulationDurationMinutes": 25,
+                "analysisMode": "fixed_experiment",
+                "simulationDurationMinutes": 30,
                 "variantEffects": {
-                    "B": {"ctr": 1.10},
-                    "C": {"ctr": 1.20},
+                    "B": {"ctr": 1.08},
+                    "C": {"ctr": 1.15},
                 },
             },
         ),
         TemplateORM(
-            name="A/B тест — Адаптивная стратегия (быстрый)",
+            name="A/B тест — Адаптивная стратегия (исследование)",
             description=(
-                "Адаптивный A/B тест для быстрого выявления победителя. "
-                "Останавливается досрочно при значимом результате. Вариант B: +25% к конверсии."
+                "Исследовательский bandit-режим для быстрого скрининга гипотез. "
+                "Для финального решения по внедрению обязателен повторный fixed_experiment тест."
             ),
             template_type="ab_test",
-            tags=["адаптивный", "быстрый", "досрочная-остановка"],
+            tags=["адаптивный", "bandit", "exploration"],
             created_by="system",
             config_json={
-                "testName": "Адаптивный тест (быстрый)",
+                "testName": "Адаптивный тест (исследование)",
                 "variants": "A, B",
                 "primaryMetric": "conversion",
                 "metricType": "binary",
-                "description": "Адаптивная стратегия для быстрых экспериментов",
+                "description": "Быстрый exploratory тест с адаптивным распределением трафика",
                 "confidenceLevel": 0.95,
                 "power": 0.8,
                 "minEffectSize": 0.1,
+                "sampleSize": 8000,
                 "trafficSplitType": "adaptive",
-                "simulationDurationMinutes": 10,
+                "analysisMode": "adaptive_bandit",
+                "simulationDurationMinutes": 20,
                 "variantEffects": {
-                    "B": {"conversion": 1.25}
+                    "B": {"conversion": 1.12}
                 },
             },
         ),
@@ -736,3 +759,128 @@ def seed_default_templates(db: Session) -> int:
     db.add_all(defaults)
     db.commit()
     return len(defaults)
+
+
+def create_assignment_audit(
+    db: Session,
+    *,
+    test_id: str,
+    session_id: str,
+    user_id: str,
+    variant: str,
+    splitter_type: str,
+    analysis_mode: str,
+    traffic_split_type: str,
+    hash_bucket: Optional[int] = None,
+    hash_space_size: Optional[int] = None,
+    seed: Optional[int] = None,
+    assignment_metadata: Optional[dict[str, Any]] = None,
+    do_commit: bool = True,
+) -> AssignmentAuditORM:
+    entity = AssignmentAuditORM(
+        test_id=test_id,
+        session_id=session_id,
+        user_id=user_id,
+        variant=variant,
+        splitter_type=splitter_type,
+        analysis_mode=analysis_mode,
+        traffic_split_type=traffic_split_type,
+        hash_bucket=hash_bucket,
+        hash_space_size=hash_space_size,
+        seed=seed,
+        assignment_metadata=assignment_metadata,
+    )
+    db.add(entity)
+    if do_commit:
+        db.commit()
+        db.refresh(entity)
+    return entity
+
+
+def get_assignment_audit_for_test(db: Session, test_id: str, limit: int = 1000) -> list[AssignmentAuditORM]:
+    return (
+        db.query(AssignmentAuditORM)
+        .filter(AssignmentAuditORM.test_id == test_id)
+        .order_by(AssignmentAuditORM.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def get_user_assignment(db: Session, *, test_id: str, user_id: str) -> Optional[UserAssignmentORM]:
+    return (
+        db.query(UserAssignmentORM)
+        .filter(UserAssignmentORM.test_id == test_id, UserAssignmentORM.user_id == user_id)
+        .first()
+    )
+
+
+def upsert_user_assignment(
+    db: Session,
+    *,
+    test_id: str,
+    user_id: str,
+    variant: str,
+    splitter_type: str,
+    hash_bucket: Optional[int] = None,
+    hash_space_size: Optional[int] = None,
+    seed: Optional[int] = None,
+    assignment_metadata: Optional[dict[str, Any]] = None,
+    do_commit: bool = True,
+) -> UserAssignmentORM:
+    entity = get_user_assignment(db, test_id=test_id, user_id=user_id)
+    if entity is None:
+        entity = UserAssignmentORM(
+            test_id=test_id,
+            user_id=user_id,
+            variant=variant,
+            splitter_type=splitter_type,
+            hash_bucket=hash_bucket,
+            hash_space_size=hash_space_size,
+            seed=seed,
+            assignment_metadata=assignment_metadata,
+        )
+        db.add(entity)
+    else:
+        entity.variant = variant
+        entity.splitter_type = splitter_type
+        entity.hash_bucket = hash_bucket
+        entity.hash_space_size = hash_space_size
+        entity.seed = seed
+        entity.assignment_metadata = assignment_metadata
+
+    if do_commit:
+        db.commit()
+        db.refresh(entity)
+
+    return entity
+
+
+def create_metric_event_if_absent(
+    db: Session,
+    *,
+    event_id: str,
+    session_id: str,
+    test_id: str,
+    metric_name: str,
+    value: float,
+    do_commit: bool = True,
+) -> tuple[MetricEventORM, bool]:
+    existing = db.query(MetricEventORM).filter(MetricEventORM.event_id == event_id).first()
+    if existing is not None:
+        return existing, False
+
+    entity = MetricEventORM(
+        event_id=event_id,
+        session_id=session_id,
+        test_id=test_id,
+        metric_name=metric_name,
+        value=value,
+    )
+    db.add(entity)
+
+    if do_commit:
+        db.commit()
+        db.refresh(entity)
+
+    return entity, True

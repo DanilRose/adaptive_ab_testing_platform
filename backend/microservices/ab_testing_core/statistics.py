@@ -231,10 +231,33 @@ class SRMChecker:
 
 
 class StatisticalAnalyzer:
-    
+
     def __init__(self, alpha: float = 0.05):
         self.alpha = alpha
-    
+
+    def _bootstrap_mean_diff_ci(
+        self,
+        control: np.ndarray,
+        treatment: np.ndarray,
+        iterations: int = 4000,
+        ci_level: float = 0.95,
+    ) -> Tuple[float, float]:
+        if len(control) == 0 or len(treatment) == 0:
+            return 0.0, 0.0
+
+        rng = np.random.default_rng(42)
+        diffs = np.empty(iterations, dtype=float)
+
+        for i in range(iterations):
+            c = rng.choice(control, size=len(control), replace=True)
+            t = rng.choice(treatment, size=len(treatment), replace=True)
+            diffs[i] = float(np.mean(t) - np.mean(c))
+
+        alpha_tail = (1.0 - ci_level) / 2.0
+        low = float(np.quantile(diffs, alpha_tail))
+        high = float(np.quantile(diffs, 1.0 - alpha_tail))
+        return low, high
+
     def analyze_continuous_metric(
         self,
         control: np.ndarray,
@@ -342,6 +365,65 @@ class StatisticalAnalyzer:
             standard_error=float(se)
         )
     
+    def analyze_ratio_metric(
+        self,
+        control_numerators: np.ndarray,
+        control_denominators: np.ndarray,
+        treatment_numerators: np.ndarray,
+        treatment_denominators: np.ndarray,
+        num_comparisons: int = 1,
+    ) -> StatisticalTestResult:
+        control_denominators = np.where(control_denominators <= 0, np.nan, control_denominators)
+        treatment_denominators = np.where(treatment_denominators <= 0, np.nan, treatment_denominators)
+
+        control_ratio = control_numerators / control_denominators
+        treatment_ratio = treatment_numerators / treatment_denominators
+
+        control_ratio = control_ratio[np.isfinite(control_ratio)]
+        treatment_ratio = treatment_ratio[np.isfinite(treatment_ratio)]
+
+        if len(control_ratio) < 10 or len(treatment_ratio) < 10:
+            return StatisticalTestResult(
+                t_statistic=0.0,
+                p_value=1.0,
+                p_value_corrected=1.0,
+                significant=False,
+                effect_size_cohens_d=0.0,
+                confidence_interval=(0.0, 0.0),
+                relative_uplift_percent=0.0,
+                standard_error=0.0,
+            )
+
+        t_stat, p_value = stats.ttest_ind(treatment_ratio, control_ratio, equal_var=False)
+        p_value_corrected = min(float(p_value) * max(1, int(num_comparisons)), 1.0)
+
+        control_mean = float(np.mean(control_ratio))
+        treatment_mean = float(np.mean(treatment_ratio))
+        diff = treatment_mean - control_mean
+
+        pooled_std = np.sqrt((np.var(control_ratio, ddof=1) + np.var(treatment_ratio, ddof=1)) / 2.0)
+        cohens_d = float(diff / pooled_std) if pooled_std > 1e-12 else 0.0
+
+        ci_low, ci_high = self._bootstrap_mean_diff_ci(control_ratio, treatment_ratio)
+
+        se = np.sqrt(
+            np.var(control_ratio, ddof=1) / len(control_ratio)
+            + np.var(treatment_ratio, ddof=1) / len(treatment_ratio)
+        )
+
+        relative_uplift = (diff / control_mean * 100.0) if abs(control_mean) > 1e-12 else 0.0
+
+        return StatisticalTestResult(
+            t_statistic=float(t_stat),
+            p_value=float(p_value),
+            p_value_corrected=float(p_value_corrected),
+            significant=p_value_corrected < self.alpha,
+            effect_size_cohens_d=cohens_d,
+            confidence_interval=(float(ci_low), float(ci_high)),
+            relative_uplift_percent=float(relative_uplift),
+            standard_error=float(se),
+        )
+
     def calculate_power(
         self,
         observed_effect: float,
@@ -422,6 +504,15 @@ def run_full_ab_analysis(
     # 1. Основной статистический тест
     if metric_type == "continuous":
         test_result = analyzer.analyze_continuous_metric(control_data, treatment_data)
+    elif metric_type == "ratio":
+        # Для ratio-метрик ожидаем, что вход уже является отношением по пользователям.
+        # Используем ratio-анализ с unit-denominator=1 как безопасный фолбэк.
+        test_result = analyzer.analyze_ratio_metric(
+            control_numerators=control_data,
+            control_denominators=np.ones_like(control_data),
+            treatment_numerators=treatment_data,
+            treatment_denominators=np.ones_like(treatment_data),
+        )
     else:
         control_conv = int(np.sum(control_data))
         treatment_conv = int(np.sum(treatment_data))

@@ -90,6 +90,8 @@ export interface ABTestCreatePayload {
   simulation_duration_minutes?: number;
   traffic_split_type?: 'fixed' | 'adaptive';
   variant_effects?: Record<string, Record<string, number>> | null;
+  analysis_mode?: 'fixed_experiment' | 'adaptive_bandit';
+  guardrails_config?: Record<string, { threshold: number; direction: 'max_increase' | 'max_decrease' | 'min_increase' | 'min_decrease' }> | null;
 }
 
 export interface StartSimulationPayload {
@@ -138,6 +140,34 @@ export interface TimeSeriesResponse {
   winner_confidence: 'low' | 'medium' | 'high';
   power_over_time: Array<Record<string, number>>;
   uplift_over_time: Array<Record<string, number>>;
+  analysis_mode?: 'fixed_experiment' | 'adaptive_bandit';
+  analysis_validity?: 'valid_for_inference' | 'exploration_only' | 'invalid_srm' | 'invalid_guardrails';
+  guardrails?: {
+    enabled: boolean;
+    passed: boolean;
+    failed_metrics: string[];
+    checks: Array<{
+      metric: string;
+      threshold: number;
+      direction: string;
+      observed: number;
+      passed: boolean;
+    }>;
+  };
+  quality_gate?: {
+    status: 'green' | 'yellow' | 'red';
+    passed: boolean;
+    passed_checks: number;
+    total_checks: number;
+    checks: Array<{
+      id: string;
+      title: string;
+      passed: boolean;
+      actual: unknown;
+      threshold: unknown;
+      known?: boolean;
+    }>;
+  };
 }
 
 export interface GeneratedHistoryItem {

@@ -9,6 +9,9 @@ from enum import Enum
 import scipy.stats as stats
 from scipy.optimize import minimize
 import warnings
+
+from .statistics import StatisticalAnalyzer
+
 warnings.filterwarnings('ignore')
 
 class MetricType(Enum):
@@ -242,8 +245,19 @@ class AdaptiveABTest:
                     p_values[variant] = 1.0
             else:
                 try:
-                    _, p_value = stats.ttest_ind(variant_data, control_data, equal_var=False)
-                    p_values[variant] = float(p_value)
+                    if self.config.metric_type == MetricType.RATIO:
+                        analyzer = StatisticalAnalyzer(alpha=1.0)
+                        ratio_result = analyzer.analyze_ratio_metric(
+                            control_numerators=control_data,
+                            control_denominators=np.ones_like(control_data),
+                            treatment_numerators=variant_data,
+                            treatment_denominators=np.ones_like(variant_data),
+                            num_comparisons=1,
+                        )
+                        p_values[variant] = float(ratio_result.p_value)
+                    else:
+                        _, p_value = stats.ttest_ind(variant_data, control_data, equal_var=False)
+                        p_values[variant] = float(p_value)
                 except:
                     p_values[variant] = 1.0
         

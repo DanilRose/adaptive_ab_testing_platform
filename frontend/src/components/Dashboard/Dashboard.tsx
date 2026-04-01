@@ -356,6 +356,11 @@ export const Dashboard: React.FC = () => {
                   Симуляция запущена
                 </Tag>
               )}
+              {test.simulation_status === 'failed' && test.status !== 'archived' && (
+                <Tag color="volcano" style={{ marginLeft: '8px' }}>
+                  Ошибка симуляции
+                </Tag>
+              )}
             </div>
           }
           description={

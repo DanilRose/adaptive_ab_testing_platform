@@ -215,9 +215,10 @@ class ABTestLifecycleService:
 
             if on_success:
                 on_success()
-        except Exception:
+        except Exception as e:
+            print(f"❌ Simulation failed for test {test_id}: {e}")
             with SessionLocal() as task_db:
-                crud.update_test_simulation_status(task_db, test_id, None)
+                crud.update_test_simulation_status(task_db, test_id, "failed")
                 crud.update_test_status(task_db, test_id, "prepared")
             if on_failure:
                 on_failure()

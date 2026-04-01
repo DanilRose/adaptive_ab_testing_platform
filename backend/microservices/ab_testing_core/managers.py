@@ -7,6 +7,8 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 from sqlalchemy import func
 from .core import ABTestManager, AdaptiveABTest, TestConfig, MetricType, TestResult
+from .traffic_splitter import FixedTrafficSplitter, AdaptiveTrafficSplitter, ABVariant
+from .decision_engine import ABDecisionEngine
 
 @dataclass
 class TestSession:
@@ -205,6 +207,7 @@ class AdaptiveABTestingPlatform:
         self.session_manager = SessionManager()
         self.test_registry = TestRegistry()
         self.metric_definitions: Dict[str, MetricType] = {}
+        self._splitters: Dict[str, Any] = {}
 
     def _parse_metric_type(self, value: Any) -> MetricType:
         try:
@@ -260,13 +263,64 @@ class AdaptiveABTestingPlatform:
             }
 
             self.metric_definitions[config.primary_metric] = config.metric_type
+            self._ensure_splitter_loaded(db_test)
             return True
 
     def _ensure_test_loaded(self, test_id: str) -> bool:
         if test_id in self.test_manager.active_tests:
             return True
         return self._load_test_from_db(test_id)
+
+    def _ensure_splitter_loaded(self, db_test: ABTestORM) -> None:
+        if db_test.test_id in self._splitters:
+            return
+
+        variants = [ABVariant(name=v, weight=1.0) for v in (db_test.variants or [])]
+        if not variants:
+            return
+
+        if (db_test.traffic_split_type or "fixed") == "adaptive":
+            self._splitters[db_test.test_id] = AdaptiveTrafficSplitter(variants)
+        else:
+            seed = int(db_test.traffic_split_seed or 42)
+            self._splitters[db_test.test_id] = FixedTrafficSplitter(variants, seed=seed)
+
+    def _resolve_test_runtime_meta(self, test_id: str) -> Dict[str, Any]:
+        with SessionLocal() as db:
+            db_test = db.query(ABTestORM).filter(ABTestORM.test_id == test_id).first()
+            if not db_test:
+                raise ValueError(f"Test {test_id} not found")
+
+            self._ensure_splitter_loaded(db_test)
+            analysis_mode = str(db_test.analysis_mode or "fixed_experiment")
+            traffic_split_type = str(db_test.traffic_split_type or "fixed")
+            splitter = self._splitters.get(test_id)
+
+            return {
+                "db_test": db_test,
+                "analysis_mode": analysis_mode,
+                "traffic_split_type": traffic_split_type,
+                "splitter": splitter,
+            }
     
+    def _normalize_reward_for_splitter(self, test_id: str, raw_value: float) -> float:
+        """
+        Нормализует reward в [0, 1] для AdaptiveTrafficSplitter.
+        - binary: ожидаем 0/1
+        - continuous/ratio: мягкая логистическая нормализация без жёстких клипов по 1000
+        """
+        config = self.test_manager.test_configs.get(test_id)
+        metric_type = config.metric_type if config else MetricType.CONTINUOUS
+
+        val = float(raw_value)
+        if metric_type == MetricType.BINARY:
+            return float(max(0.0, min(1.0, val)))
+
+        # robust-нормализация для непрерывных метрик
+        scale = max(1.0, abs(val) + 1.0)
+        normalized = 1.0 / (1.0 + np.exp(-val / scale))
+        return float(max(0.0, min(1.0, normalized)))
+
     def refresh_test_from_database(self, test_id: str):
         """
         Обновляет данные теста из базы данных
@@ -321,107 +375,288 @@ class AdaptiveABTestingPlatform:
         if not self._ensure_test_loaded(test_id):
             raise ValueError(f"Test {test_id} not found")
 
-        variant = self.test_manager.assign_variant(test_id, user_id, user_context)
+        runtime = self._resolve_test_runtime_meta(test_id)
+        splitter = runtime["splitter"]
+        if splitter is None:
+            raise ValueError(f"Splitter for test {test_id} not initialized")
+
+        with SessionLocal() as db:
+            persisted_assignment = crud.get_user_assignment(db, test_id=test_id, user_id=user_id)
+
+            if persisted_assignment is not None:
+                assignment_meta = {
+                    "variant": str(persisted_assignment.variant),
+                    "hash_bucket": persisted_assignment.hash_bucket,
+                    "hash_space_size": persisted_assignment.hash_space_size,
+                    "seed": persisted_assignment.seed,
+                    "splitter_type": persisted_assignment.splitter_type,
+                    "sticky": True,
+                }
+            else:
+                if hasattr(splitter, "assign_variant_with_metadata"):
+                    if runtime["traffic_split_type"] == "fixed":
+                        assignment_meta = splitter.assign_variant_with_metadata(user_id=user_id, test_id=test_id)
+                    else:
+                        assignment_meta = splitter.assign_variant_with_metadata(user_id=user_id)
+                else:
+                    variant_fallback = splitter.assign_variant(user_id, test_id)
+                    assignment_meta = {
+                        "variant": variant_fallback,
+                        "hash_bucket": None,
+                        "hash_space_size": None,
+                        "seed": None,
+                        "splitter_type": runtime["traffic_split_type"],
+                    }
+
+                crud.upsert_user_assignment(
+                    db,
+                    test_id=test_id,
+                    user_id=user_id,
+                    variant=str(assignment_meta["variant"]),
+                    splitter_type=str(assignment_meta.get("splitter_type") or runtime["traffic_split_type"]),
+                    hash_bucket=assignment_meta.get("hash_bucket"),
+                    hash_space_size=assignment_meta.get("hash_space_size"),
+                    seed=assignment_meta.get("seed"),
+                    assignment_metadata={"user_context": user_context or {}},
+                    do_commit=True,
+                )
+                assignment_meta["sticky"] = False
+
+        variant = str(assignment_meta["variant"])
         session_id = self.session_manager.start_session(test_id, user_id, variant)
-        
+
+        with SessionLocal() as db:
+            crud.create_assignment_audit(
+                db,
+                test_id=test_id,
+                session_id=session_id,
+                user_id=user_id,
+                variant=variant,
+                splitter_type=str(assignment_meta.get("splitter_type") or runtime["traffic_split_type"]),
+                analysis_mode=runtime["analysis_mode"],
+                traffic_split_type=runtime["traffic_split_type"],
+                hash_bucket=assignment_meta.get("hash_bucket"),
+                hash_space_size=assignment_meta.get("hash_space_size"),
+                seed=assignment_meta.get("seed"),
+                assignment_metadata={
+                    "user_context": user_context or {},
+                    "sticky_reused": bool(assignment_meta.get("sticky", False)),
+                },
+            )
+
         return {
             'session_id': session_id,
             'variant': variant,
-            'test_id': test_id
+            'test_id': test_id,
+            'analysis_mode': runtime["analysis_mode"],
+            'traffic_split_type': runtime["traffic_split_type"],
+            'assignment_audit': {
+                'splitter_type': assignment_meta.get("splitter_type"),
+                'hash_bucket': assignment_meta.get("hash_bucket"),
+                'hash_space_size': assignment_meta.get("hash_space_size"),
+                'seed': assignment_meta.get("seed"),
+                'sticky_reused': bool(assignment_meta.get("sticky", False)),
+            },
         }
     
-    def record_user_metric(self, session_id: str, metric_name: str, value: float):
+    def record_user_metric(self, session_id: str, metric_name: str, value: float, event_id: Optional[str] = None) -> Dict[str, Any]:
         session = self.session_manager.active_sessions.get(session_id)
-        if not session:
-            raise ValueError(f"Session {session_id} not found")
-        
-        session.metrics[metric_name] = value
-        
-        if metric_name == self._get_primary_metric(session.test_id):
-            self.test_manager.record_metric(session.test_id, session.variant, value)
+        db_session: Optional[TestSessionORM] = None
+
+        with SessionLocal() as db:
+            db_session = db.query(TestSessionORM).filter(TestSessionORM.session_id == session_id).first()
+            if not db_session:
+                raise ValueError(f"Session {session_id} not found")
+
+            test_id = str(db_session.test_id)
+            effective_event_id = event_id or f"{session_id}:{metric_name}:{uuid.uuid4().hex[:12]}"
+
+            _, created = crud.create_metric_event_if_absent(
+                db,
+                event_id=effective_event_id,
+                session_id=session_id,
+                test_id=test_id,
+                metric_name=metric_name,
+                value=float(value),
+                do_commit=True,
+            )
+
+            if not created:
+                return {
+                    "deduplicated": True,
+                    "event_id": effective_event_id,
+                    "session_id": session_id,
+                    "metric_name": metric_name,
+                }
+
+            session_metrics = dict(db_session.metrics or {})
+            session_metrics[metric_name] = float(value)
+            db_session.metrics = session_metrics
+            db.commit()
+
+            if session is not None:
+                session.metrics[metric_name] = float(value)
+
+            primary_metric = self._get_primary_metric(test_id)
+
+            if metric_name == primary_metric:
+                if self._ensure_test_loaded(test_id):
+                    self.test_manager.record_metric(test_id, str(db_session.variant), float(value))
+
+                splitter = self._splitters.get(test_id)
+                if isinstance(splitter, AdaptiveTrafficSplitter):
+                    reward = self._normalize_reward_for_splitter(test_id, float(value))
+                    splitter.update(str(db_session.variant), reward)
+
+        return {
+            "deduplicated": False,
+            "event_id": effective_event_id,
+            "session_id": session_id,
+            "metric_name": metric_name,
+        }
     def complete_user_session(self, session_id: str, final_metrics: Dict[str, float] = None):
         session = self.session_manager.end_session(session_id, final_metrics)
         self._update_test_progress(session.test_id)
 
     
     def get_test_results(self, test_id: str) -> Dict[str, Any]:
-        # Проверяем, нужно ли обновить тест из базы данных
-        # Если теста нет в памяти, пробуем загрузить его из базы данных
-        if test_id not in self.test_manager.active_tests:
-            # Пытаемся загрузить тест из базы данных, независимо от статуса
-            loaded = self._load_test_from_db(test_id)
-            if not loaded:
-                raise ValueError(f"Test {test_id} not found")
-        
-        # Проверяем статус теста в базе данных
         with SessionLocal() as db:
             db_test = db.query(ABTestORM).filter(ABTestORM.test_id == test_id).first()
-            if db_test and db_test.status == 'completed':
-                # Если тест завершен, но не в памяти, попробуем создать его заново
-                # на основе данных из базы данных для получения результатов
-                if test_id not in self.test_manager.active_tests:
-                    # Создаем временный тест на основе данных из базы
-                    config = TestConfig(
-                        test_id=db_test.test_id,
-                        variants=db_test.variants or [],
-                        primary_metric=db_test.primary_metric,
-                        metric_type=self._parse_metric_type(db_test.metric_type),
-                        sample_size=db_test.sample_size,
-                        confidence_level=db_test.confidence_level,
-                        power=db_test.power,
-                        min_effect_size=db_test.min_effect_size,
-                    )
-                    
-                    # Создаем временный тест для получения результатов
-                    temp_test = AdaptiveABTest(config)
-                    
-                    # Загружаем данные сессий для этого теста
-                    sessions = db.query(TestSessionORM).filter(TestSessionORM.test_id == test_id).all()
-                    
-                    # Распределяем метрики по вариантам
-                    for session in sessions:
-                        if session.metrics and session.variant in config.variants:
-                            for metric_name, value in session.metrics.items():
-                                if metric_name == config.primary_metric:
-                                    temp_test.record_observation(session.variant, value)
-                    
-                    # Получаем результаты из временного теста
-                    results = temp_test.get_results()
-                    p_values = temp_test.calculate_statistical_significance()
-                else:
-                    # Если тест в памяти, используем его
-                    results, p_values = self.test_manager.get_test_results(test_id)
-            else:
-                # Для активных тестов используем обычную логику
-                results, p_values = self.test_manager.get_test_results(test_id)
+            if not db_test:
+                raise ValueError(f"Test {test_id} not found")
 
-        session_metrics = self.session_manager.get_session_metrics(test_id)
-        summary = self._generate_summary(results, p_values)
-        pm_summary = self._build_pm_summary(results, p_values, summary)
-        
+            config = TestConfig(
+                test_id=db_test.test_id,
+                variants=db_test.variants or [],
+                primary_metric=db_test.primary_metric,
+                metric_type=self._parse_metric_type(db_test.metric_type),
+                sample_size=db_test.sample_size,
+                confidence_level=db_test.confidence_level,
+                power=db_test.power,
+                min_effect_size=db_test.min_effect_size,
+            )
+
+            temp_test = AdaptiveABTest(config)
+            sessions = db.query(TestSessionORM).filter(TestSessionORM.test_id == test_id).all()
+
+            session_metrics: Dict[str, List[float]] = {}
+            for session in sessions:
+                metrics = dict(session.metrics or {})
+                for metric_name, raw_value in metrics.items():
+                    try:
+                        val = float(raw_value)
+                    except Exception:
+                        continue
+                    session_metrics.setdefault(metric_name, []).append(val)
+
+                if session.variant in config.variants and config.primary_metric in metrics:
+                    try:
+                        temp_test.record_observation(str(session.variant), float(metrics[config.primary_metric]))
+                    except Exception:
+                        pass
+
+            results = temp_test.get_results()
+            p_values = temp_test.calculate_statistical_significance()
+
+        corrected_p = ABDecisionEngine.holm_bonferroni_correction(p_values)
+
+        control_variant = list(results.keys())[0] if results else None
+        inferred_means = ABDecisionEngine.infer_variant_means(results)
+        winner_pre = control_variant
+        winner_uplift_pre = -1e18
+        if control_variant and control_variant in inferred_means:
+            control_mean = inferred_means[control_variant]
+            for variant, mean_val in inferred_means.items():
+                if variant == control_variant:
+                    continue
+                uplift = ((mean_val - control_mean) / control_mean * 100.0) if abs(control_mean) > 1e-12 else 0.0
+                if corrected_p.get(variant, 1.0) < 0.05 and uplift > winner_uplift_pre:
+                    winner_uplift_pre = uplift
+                    winner_pre = variant
+
+        guardrails_status = ABDecisionEngine.evaluate_guardrails(
+            guardrails_config=(db_test.guardrails_config if db_test else None),
+            variant_means=inferred_means,
+            control_variant=control_variant or "",
+            winner_variant=winner_pre,
+        )
+
+        analysis_validity = ABDecisionEngine.resolve_analysis_validity(
+            analysis_mode=(db_test.analysis_mode if db_test else "fixed_experiment"),
+            traffic_split_type=(db_test.traffic_split_type if db_test else "fixed"),
+            srm_detected=(True if db_test and db_test.srm_check_passed == 0 else False if db_test and db_test.srm_check_passed == 1 else None),
+            guardrails_failed=not bool(guardrails_status.get("passed", True)),
+        )
+
+        summary = ABDecisionEngine.build_decision_summary(
+            results=results,
+            p_values_raw=p_values,
+            corrected_p_values=corrected_p,
+            alpha=0.05,
+            analysis_validity=analysis_validity,
+            guardrails_status=guardrails_status,
+        )
+
+        pm_summary = self._build_pm_summary(results, corrected_p, summary)
+
+        if db_test:
+            with SessionLocal() as dbw:
+                current = dbw.query(ABTestORM).filter(ABTestORM.test_id == test_id).first()
+                if current:
+                    current.analysis_validity = analysis_validity
+                    current.guardrails_status = guardrails_status
+                    dbw.commit()
+
+        quality_gate = self._build_quality_gate(
+            db_test=db_test,
+            results=results,
+            corrected_p=corrected_p,
+            guardrails_status=guardrails_status,
+            alpha=0.05,
+        )
+
         return {
             'test_id': test_id,
             'results': {k: asdict(v) for k, v in results.items()},
             'statistical_significance': p_values,
+            'statistical_significance_corrected': corrected_p,
             'session_metrics': session_metrics,
             'summary': summary,
             'pm_summary': pm_summary,
+            'analysis_mode': (db_test.analysis_mode if db_test else "fixed_experiment"),
+            'traffic_split_type': (db_test.traffic_split_type if db_test else "fixed"),
+            'analysis_validity': analysis_validity,
+            'guardrails': guardrails_status,
+            'quality_gate': quality_gate,
         }
     
     def stop_test(self, test_id: str, reason: str = "Manual stop") -> Dict[str, Any]:
-        if not self._ensure_test_loaded(test_id):
-            raise ValueError(f"Test {test_id} not found")
+        with SessionLocal() as db:
+            db_test = db.query(ABTestORM).filter(ABTestORM.test_id == test_id).first()
+            if not db_test:
+                raise ValueError(f"Test {test_id} not found")
 
-        test_results = self.test_manager.get_test_results(test_id)
-        self.test_registry.archive_test(test_id, reason)
-        final_summary = self.test_manager.stop_test(test_id)
-        
+            db_test.status = 'completed'
+            db_test.simulation_status = None
+            db.commit()
+
+        final_results = self.get_test_results(test_id)
+
+        if test_id in self.test_manager.active_tests:
+            del self.test_manager.active_tests[test_id]
+        if test_id in self.test_manager.test_configs:
+            del self.test_manager.test_configs[test_id]
+
+        if test_id in self.test_registry.tests:
+            self.test_registry.tests[test_id]['status'] = 'completed'
+
         return {
             'test_id': test_id,
-            'final_results': test_results,
-            'summary': final_summary,
+            'final_results': final_results,
+            'summary': final_results.get('summary', {}),
             'stopped_at': datetime.now(),
-            'reason': reason
+            'reason': reason,
+            'status': 'completed',
         }
     
     def get_platform_stats(self) -> Dict[str, Any]:
@@ -443,6 +678,12 @@ class AdaptiveABTestingPlatform:
         for test_info in self.test_registry.tests.values():
             if test_info['config']['test_id'] == test_id:
                 return test_info['config']['primary_metric']
+
+        with SessionLocal() as db:
+            db_test = db.query(ABTestORM).filter(ABTestORM.test_id == test_id).first()
+            if db_test:
+                return str(db_test.primary_metric)
+
         return ""
     def _update_test_progress(self, test_id: str):
         from sqlalchemy import func
@@ -498,6 +739,111 @@ class AdaptiveABTestingPlatform:
             'significant_variants': significant_variants,
             'control_variant': control_variant,
             'p_values': p_values
+        }
+
+    def _build_quality_gate(
+        self,
+        *,
+        db_test: Optional[ABTestORM],
+        results: Dict[str, TestResult],
+        corrected_p: Dict[str, float],
+        guardrails_status: Dict[str, Any],
+        alpha: float,
+    ) -> Dict[str, Any]:
+        variants = list(results.keys())
+        control = variants[0] if variants else None
+        planned_sample_size = int(db_test.sample_size) if db_test and db_test.sample_size else None
+        min_required_per_variant = max(30, int((planned_sample_size / max(1, len(variants))) * 0.9)) if planned_sample_size else 30
+
+        sufficient_n = all(int(results[v].sample_size) >= min_required_per_variant for v in variants)
+        any_significant = any(float(p) < alpha for p in corrected_p.values())
+
+        srm_known = bool(db_test and db_test.srm_check_passed is not None)
+        srm_pass = bool(db_test and db_test.srm_check_passed == 1)
+        guardrails_enabled = bool(guardrails_status.get("enabled", False))
+        guardrails_pass = bool(guardrails_status.get("passed", True))
+
+        power_threshold = 0.8
+        min_power = 0.0
+        power_pass = False
+        if control and control in results:
+            control_stat = results[control]
+            control_std = max(1e-6, float(control_stat.std))
+            powers: List[float] = []
+            for variant, stat in results.items():
+                if variant == control:
+                    continue
+                effect = float(stat.mean) - float(control_stat.mean)
+                n = max(1, min(int(control_stat.sample_size), int(stat.sample_size)))
+                effect_size = effect / control_std
+                z_alpha = 1.96
+                ncp = effect_size * np.sqrt(n / 2.0)
+                pwr = float(1.0 - 0.5 * (1.0 + np.math.erf((z_alpha - ncp) / np.sqrt(2.0))))
+                powers.append(max(0.0, min(1.0, pwr)))
+            if powers:
+                min_power = float(min(powers))
+                power_pass = min_power >= power_threshold
+
+        checks = [
+            {
+                "id": "srm_pass",
+                "title": "SRM check",
+                "passed": srm_pass,
+                "actual": (None if not db_test else db_test.srm_p_value),
+                "threshold": "srm_check_passed = true",
+                "known": srm_known,
+            },
+            {
+                "id": "power",
+                "title": "Power >= 0.8",
+                "passed": power_pass,
+                "actual": min_power,
+                "threshold": power_threshold,
+                "known": True,
+            },
+            {
+                "id": "corrected_p",
+                "title": f"Corrected p-value < {alpha}",
+                "passed": any_significant,
+                "actual": corrected_p,
+                "threshold": alpha,
+                "known": True,
+            },
+            {
+                "id": "guardrails",
+                "title": "Guardrails pass",
+                "passed": guardrails_pass,
+                "actual": guardrails_status,
+                "threshold": True,
+                "known": guardrails_enabled,
+            },
+            {
+                "id": "sufficient_n",
+                "title": "Sufficient sample size",
+                "passed": sufficient_n,
+                "actual": {v: int(results[v].sample_size) for v in variants},
+                "threshold": min_required_per_variant,
+                "known": True,
+            },
+        ]
+
+        passed_count = sum(1 for c in checks if c["passed"])
+        total = len(checks)
+        critical_fail = (srm_known and not srm_pass) or (guardrails_enabled and not guardrails_pass)
+
+        if critical_fail:
+            status = "red"
+        elif passed_count == total:
+            status = "green"
+        else:
+            status = "yellow"
+
+        return {
+            "status": status,
+            "passed": passed_count == total and not critical_fail,
+            "passed_checks": passed_count,
+            "total_checks": total,
+            "checks": checks,
         }
 
     def _build_pm_summary(self, results: Dict[str, TestResult], p_values: Dict[str, float], summary: Dict[str, Any]) -> Dict[str, Any]:
