@@ -12,7 +12,6 @@ import {
   Tag,
   Space,
   Typography,
-  Tooltip,
   Alert,
   Switch,
 } from 'antd';
@@ -168,9 +167,14 @@ export const TestCreator: React.FC = () => {
     try {
       let variantsArray: string[];
       if (typeof values.variants === 'string') {
-        variantsArray = values.variants.split(',').map((v: string) => v.trim());
+        variantsArray = values.variants
+          .split(',')
+          .map((v: string) => v.trim())
+          .filter((v: string) => v.length > 0);
       } else if (Array.isArray(values.variants)) {
-        variantsArray = values.variants;
+        variantsArray = values.variants
+          .map((v: string) => String(v).trim())
+          .filter((v: string) => v.length > 0);
       } else {
         throw new Error('Варианты должны быть строкой или массивом');
       }

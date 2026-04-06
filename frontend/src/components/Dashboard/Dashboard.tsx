@@ -183,7 +183,6 @@ export const Dashboard: React.FC = () => {
         await handleDeleteTest(testId, true);
       },
       onCancel: async () => {
-        // Пользователь нажал "Отмена" в модалке, но мы хотим дать возможность переместить в подготовленные
         Modal.confirm({
           title: 'Переместить в подготовленные?',
           content: 'Тест будет перемещен в раздел "Подготовленные тесты" и его можно будет запустить снова',
@@ -333,7 +332,6 @@ export const Dashboard: React.FC = () => {
 
     const actions = getActions();
 
-    // Стили для тестов на паузе
     const itemStyle = isPaused ? {
       background: '#fff7e6',
       border: '1px solid #ffd591',
