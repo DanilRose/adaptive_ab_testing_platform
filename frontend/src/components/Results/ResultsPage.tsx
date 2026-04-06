@@ -628,7 +628,7 @@ export const ResultsPage: React.FC = () => {
               <XAxis dataKey="variant" label={{ value: 'Вариант', position: 'insideBottom', offset: -5 }} />
               <YAxis label={{ value: 'Доля трафика, %', angle: -90, position: 'insideLeft' }} />
               <Tooltip
-                formatter={(value: number, name: string) => [
+                formatter={(value: number) => [
                   `${Number(value).toFixed(2)}%`,
                   'Доля трафика',
                 ]}

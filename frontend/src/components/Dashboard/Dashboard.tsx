@@ -9,8 +9,6 @@ import {
   FolderOutlined,
 } from '@ant-design/icons';
 
-const { Title } = Typography;
-
 interface Test {
   test_id: string;
   test_name: string;
@@ -47,7 +45,7 @@ export const Dashboard: React.FC = () => {
   const [datasets, setDatasets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [simulationLoading, setSimulationLoading] = useState<string | null>(null);
-  const pollingRef = React.useRef<number | null>(null);
+  const pollingRef = useRef<number | null>(null);
 
   useEffect(() => {
     loadDashboardData();
@@ -58,7 +56,7 @@ export const Dashboard: React.FC = () => {
     }, 3000);
     
     return () => {
-      if (pollingRef.current) {
+      if (pollingRef.current !== null) {
         window.clearInterval(pollingRef.current);
       }
     };

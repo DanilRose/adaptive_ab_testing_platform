@@ -7,6 +7,8 @@ from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
+import math 
+
 warnings.filterwarnings('ignore')
 
 from backend.microservices.shared.utils import sanitize_float
