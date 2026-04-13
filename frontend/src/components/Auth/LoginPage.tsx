@@ -6,8 +6,8 @@ import { useTheme } from '@/context/ThemeContext';
 import type { LoginCredentials, UserRole } from '@/types';
 
 const roleHomeRoute: Record<UserRole, string> = {
-  developer: '/',
-  analyst: '/create-test',
+  developer: '/ab-manager',
+  analyst: '/ab-manager',
   manager: '/results',
 };
 

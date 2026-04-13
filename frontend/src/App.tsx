@@ -1,8 +1,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Navigate, Route, Routes } from 'react-router-dom';
 import { AppLayout } from '@/components/Layout';
-import { Dashboard } from './components/Dashboard/Dashboard';
-import { TestCreator } from './components/TestCreator/TestCreator';
+import { ABManager } from './components/ABManager/ABManager';
 import { GANManager } from './components/GANManager/GANManager';
 import { TemplatesPage } from './components/Templates/TemplatesPage';
 import { ResultsPage } from './components/Results/ResultsPage';
@@ -31,21 +30,15 @@ const AppRoutes: React.FC = () => {
 
       <Route
         path="/"
-        element={
-          <ProtectedRoute allowedRoles={['developer']}>
-            <AppLayout>
-              <Dashboard />
-            </AppLayout>
-          </ProtectedRoute>
-        }
+        element={<Navigate to="/ab-manager" replace />}
       />
 
       <Route
-        path="/create-test"
+        path="/ab-manager"
         element={
           <ProtectedRoute allowedRoles={['developer', 'analyst']}>
             <AppLayout>
-              <TestCreator />
+              <ABManager />
             </AppLayout>
           </ProtectedRoute>
         }

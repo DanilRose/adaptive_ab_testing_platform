@@ -1,14 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard,
-  PlusCircle,
   BarChart3,
   FileText,
   ChevronLeft,
   ChevronRight,
   BrainCircuit,
   Cpu,
+  FlaskConical,
   type LucideProps,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -26,9 +25,8 @@ interface MenuRouteItem {
 }
 
 const menuRoutes: MenuRouteItem[] = [
-  { key: '/', path: '/', label: 'Дашборд', icon: LayoutDashboard, allowedRoles: ['developer'] },
-  { key: '/create-test', path: '/create-test', label: 'Создать тест', icon: PlusCircle, allowedRoles: ['developer', 'analyst'] },
-  { key: '/gan-manager', path: '/gan-manager', label: 'GAN Менеджер', icon: LayoutDashboard, allowedRoles: ['developer', 'analyst'] },
+  { key: '/ab-manager', path: '/ab-manager', label: 'A/B Менеджер', icon: FlaskConical, allowedRoles: ['developer', 'analyst'] },
+  { key: '/gan-manager', path: '/gan-manager', label: 'GAN Менеджер', icon: Cpu, allowedRoles: ['developer', 'analyst'] },
   { key: '/results', path: '/results', label: 'Результаты', icon: BarChart3, allowedRoles: ['developer', 'manager'] },
   { key: '/templates', path: '/templates', label: 'Шаблоны', icon: FileText, allowedRoles: ['developer', 'analyst'] },
 ];
@@ -182,8 +180,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle }) =
             const Icon = item.icon;
             const isActive = selectedKey === item.key;
             const isHovered = hoveredKey === item.key;
-            const isGAN = item.key === '/gan-manager';
-
             const iconColor = isActive
               ? c.navTextAct
               : isHovered ? c.navTextHov : c.navText;
@@ -209,11 +205,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle }) =
                   justifyContent: collapsed ? 'center' : 'flex-start',
                 }}
               >
-                {isGAN ? (
-                  <Cpu size={17} color={iconColor} strokeWidth={isActive ? 2.2 : 1.8} />
-                ) : (
-                  <Icon size={17} color={iconColor} strokeWidth={isActive ? 2.2 : 1.8} />
-                )}
+                <Icon size={17} color={iconColor} strokeWidth={isActive ? 2.2 : 1.8} />
 
                 {!collapsed && (
                   <span style={{
