@@ -127,9 +127,10 @@ export interface TimeSeriesResponse {
   completion_percentage: number;
   stopped_early: boolean;
   early_stop_reason: string | null;
+  early_stopping_enabled?: boolean;
   current_sequential_look: number;
   max_sequential_looks: number;
-  srm_check_passed: number | null;
+  srm_check_passed: boolean | null;
   srm_p_value: number | null;
   traffic_split: {
     variant_counts: Record<string, number>;
@@ -154,6 +155,7 @@ export interface TimeSeriesResponse {
       passed: boolean;
     }>;
   };
+  p_values_corrected_latest?: Record<string, number>;
   quality_gate?: {
     status: 'green' | 'yellow' | 'red';
     passed: boolean;
@@ -168,6 +170,9 @@ export interface TimeSeriesResponse {
       known?: boolean;
     }>;
   };
+  recommendation_status?: 'deploy' | 'do_not_deploy' | 'need_more_data';
+  recommendation_reason?: string[];
+  rollout_hint?: string;
 }
 
 export interface GeneratedHistoryItem {

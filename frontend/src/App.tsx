@@ -4,7 +4,9 @@ import { AppLayout } from '@/components/Layout';
 import { ABManager } from './components/ABManager/ABManager';
 import { GANManager } from './components/GANManager/GANManager';
 import { TemplatesPage } from './components/Templates/TemplatesPage';
-import { ResultsPage } from './components/Results/ResultsPage';
+import { ResultsSectionPage } from './components/Results/ResultsSectionPage';
+import { ResultsOverviewPage } from './components/Results/ResultsOverviewPage';
+import { ResultsChartsPage } from './components/Results/ResultsChartsPage';
 import { LoginPage } from './components/Auth/LoginPage';
 import { ProtectedRoute } from './components/Auth/ProtectedRoute';
 import { useAuth } from './context/AuthContext';
@@ -60,11 +62,15 @@ const AppRoutes: React.FC = () => {
         element={
           <ProtectedRoute allowedRoles={['developer', 'manager']}>
             <AppLayout>
-              <ResultsPage />
+              <ResultsSectionPage />
             </AppLayout>
           </ProtectedRoute>
         }
-      />
+      >
+        <Route index element={<Navigate to="overview" replace />} />
+        <Route path="overview" element={<ResultsOverviewPage />} />
+        <Route path="charts" element={<ResultsChartsPage />} />
+      </Route>
 
       <Route
         path="/templates"

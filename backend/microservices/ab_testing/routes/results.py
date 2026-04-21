@@ -271,7 +271,7 @@ async def get_time_series_chart_data(
                 "early_stop_reason": test.early_stop_reason,
                 "current_sequential_look": int(test.current_sequential_look or 0),
                 "max_sequential_looks": int(test.max_sequential_looks or 5),
-                "srm_check_passed": test.srm_check_passed,
+                "srm_check_passed": (None if test.srm_check_passed is None else bool(test.srm_check_passed)),
                 "srm_p_value": test.srm_p_value,
                 "traffic_split": {"variant_counts": {}, "variant_percentages": {}},
                 "winner": None,
@@ -281,6 +281,13 @@ async def get_time_series_chart_data(
                 "guardrails": test.guardrails_status,
                 "p_values_corrected_latest": {},
                 "quality_gate": quality_gate,
+                "recommendation_status": "need_more_data",
+                "recommendation_reason": [
+                    "Недостаточно данных временных рядов для итогового вывода",
+                    "Эксперимент необходимо продолжить до накопления репрезентативной выборки",
+                    "Решение о внедрении будет сформировано после появления winner и проверок валидности",
+                ],
+                "rollout_hint": "0% (продолжить эксперимент)",
             }
 
         normalized_rows: List[Dict[str, Any]] = []
@@ -315,7 +322,7 @@ async def get_time_series_chart_data(
                 "early_stop_reason": test.early_stop_reason,
                 "current_sequential_look": int(test.current_sequential_look or 0),
                 "max_sequential_looks": int(test.max_sequential_looks or 5),
-                "srm_check_passed": test.srm_check_passed,
+                "srm_check_passed": (None if test.srm_check_passed is None else bool(test.srm_check_passed)),
                 "srm_p_value": test.srm_p_value,
                 "traffic_split": {"variant_counts": {}, "variant_percentages": {}},
                 "winner": None,
@@ -325,6 +332,13 @@ async def get_time_series_chart_data(
                 "guardrails": test.guardrails_status,
                 "p_values_corrected_latest": {},
                 "quality_gate": quality_gate,
+                "recommendation_status": "need_more_data",
+                "recommendation_reason": [
+                    "Данные временных рядов повреждены или отсутствуют",
+                    "Невозможно корректно проверить p-value, SRM и uplift",
+                    "Требуется повторный запуск/продолжение эксперимента",
+                ],
+                "rollout_hint": "0% (продолжить эксперимент)",
             }
 
         chart_data: List[Dict[str, Any]] = normalized_rows
@@ -451,6 +465,51 @@ async def get_time_series_chart_data(
             power_over_time.append(power_point)
             uplift_over_time.append(uplift_point)
 
+        srm_passed = None if test.srm_check_passed is None else bool(test.srm_check_passed)
+        guardrails_status = _as_dict(test.guardrails_status)
+        guardrails_enabled = bool(guardrails_status.get("enabled", False))
+        guardrails_passed = bool(guardrails_status.get("passed", True)) if guardrails_enabled else True
+        analysis_valid = str(test.analysis_validity or "") == "valid_for_inference"
+        winner_present = winner is not None
+        winner_corrected_p = corrected_latest_p_values.get(str(winner), 1.0) if winner_present else 1.0
+        winner_p_ok = bool(winner_present and winner_corrected_p < 0.05)
+        uplift_positive = bool(winner_present and float(best_uplift) > 0.0)
+
+        deploy_allowed = all([
+            winner_present,
+            winner_p_ok,
+            analysis_valid,
+            srm_passed is True,
+            guardrails_passed,
+            uplift_positive,
+        ])
+
+        recommendation_reason: List[str] = [
+            f"Победитель: {'определён (' + str(winner) + ')' if winner_present else 'не определён'}",
+            f"Скорректированное p-value winner: {winner_corrected_p:.4f} ({'OK' if winner_p_ok else 'FAIL'})",
+            f"Валидность анализа: {test.analysis_validity or 'unknown'} ({'OK' if analysis_valid else 'FAIL'})",
+            f"SRM check: {'PASS' if srm_passed is True else ('FAIL' if srm_passed is False else 'N/A')}",
+            f"Guardrails: {'PASS' if guardrails_passed else 'FAIL'}",
+            f"Uplift winner: {float(best_uplift):.2f}% ({'OK' if uplift_positive else 'FAIL'})",
+        ]
+
+        hard_blockers = [
+            not analysis_valid,
+            srm_passed is False,
+            not guardrails_passed,
+            winner_present and not uplift_positive,
+        ]
+
+        if deploy_allowed:
+            recommendation_status = "deploy"
+            rollout_hint = "100%" if winner_confidence == "high" and quality_gate.get("status") == "green" else "50%"
+        elif any(hard_blockers):
+            recommendation_status = "do_not_deploy"
+            rollout_hint = "0%"
+        else:
+            recommendation_status = "need_more_data"
+            rollout_hint = "0% (продолжить эксперимент)"
+
         response_payload = {
             "test_id": test_id,
             "variants": variants,
@@ -463,7 +522,7 @@ async def get_time_series_chart_data(
             "early_stopping_enabled": bool(_as_dict(test.extra_config).get("early_stopping_enabled", False)),
             "current_sequential_look": int(test.current_sequential_look or 0),
             "max_sequential_looks": int(test.max_sequential_looks or 5),
-            "srm_check_passed": test.srm_check_passed,
+            "srm_check_passed": srm_passed,
             "srm_p_value": test.srm_p_value,
             "traffic_split": {
                 "variant_counts": variant_counts,
@@ -479,6 +538,9 @@ async def get_time_series_chart_data(
             "guardrails": test.guardrails_status,
             "p_values_corrected_latest": corrected_latest_p_values,
             "quality_gate": quality_gate,
+            "recommendation_status": recommendation_status,
+            "recommendation_reason": recommendation_reason,
+            "rollout_hint": rollout_hint,
         }
         return _sanitize_for_json(response_payload)
 
