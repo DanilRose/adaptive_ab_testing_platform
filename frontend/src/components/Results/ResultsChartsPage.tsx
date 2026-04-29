@@ -348,19 +348,7 @@ export const ResultsChartsPage: React.FC = () => {
 
   return (
     <>
-      <div
-        style={{
-          marginBottom: 16,
-          borderRadius: 14,
-          border: `1px solid ${isDark ? 'rgba(217,119,6,0.32)' : '#fcd38d'}`,
-          background: isDark ? 'linear-gradient(135deg, rgba(217,119,6,0.18), rgba(59,130,246,0.08))' : 'linear-gradient(135deg, #fff7e6, #fff)',
-          boxShadow: c.shadow,
-          padding: 16,
-        }}
-      >
-        <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.35px', color: c.textSub, marginBottom: 6 }}>Аналитика динамики</div>
-        <div style={{ fontSize: 17, fontWeight: 800, color: c.textPrimary }}>Подробный просмотр поведения метрик на всём пути эксперимента</div>
-      </div>
+
 
       <div style={{ borderRadius: 14, border: `1px solid ${c.border}`, backgroundColor: c.panelBg, boxShadow: c.shadow, overflow: 'hidden', marginBottom: 14 }}>
         <div style={{ padding: '12px 14px', borderBottom: `1px solid ${c.border}`, backgroundColor: c.panelSoft, fontSize: 14, fontWeight: 700, color: c.textPrimary }}>
