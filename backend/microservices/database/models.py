@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -27,8 +28,15 @@ class UserORM(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
-    role: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), index=True, nullable=False, default="user")
     full_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    job_title: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    permissions_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    avatar_blob: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    avatar_mime_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

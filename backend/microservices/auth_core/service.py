@@ -37,12 +37,34 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 
+def _normalize_user_role(role: str) -> UserRole:
+    # В новой модели роль у всех базовая: user.
+    return UserRole.user
+
+
+def _normalize_permissions(permissions: list[str] | None) -> list[str]:
+    source = permissions or []
+    mapped = [
+        "GAN_менеджер_генерация_данных" if p == "GAN_менеджер_генерация"
+        else "AB_тесты_удаление_и_архивация" if p == "AB_тесты_архивация"
+        else "Шаблоны_создание" if p == "Шаблоны_добавление"
+        else p
+        for p in source
+    ]
+    return list(dict.fromkeys(mapped))
+
+
 def _to_user_in_db(user: UserORM) -> UserInDB:
     return UserInDB(
         id=user.id,
         username=user.username,
-        role=UserRole(user.role),
+        role=_normalize_user_role(user.role),
         full_name=user.full_name,
+        job_title=user.job_title,
+        permissions=_normalize_permissions(user.permissions_json),
+        email=user.email,
+        phone=user.phone,
+        avatar_url=user.avatar_url,
         hashed_password=user.hashed_password,
     )
 
@@ -102,12 +124,24 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
         username=user.username,
         role=user.role,
         full_name=user.full_name,
+        job_title=user.job_title,
+        permissions=user.permissions,
+        email=user.email,
+        phone=user.phone,
+        avatar_url=user.avatar_url,
     )
 
 
 def require_role(*roles: str):
 
     async def role_checker(current_user: User = Depends(get_current_user)) -> User:
+        # Глобальный bypass для модели granular-permissions:
+        # если у пользователя есть право администрирования,
+        # считаем, что legacy role-check пройден для всех эндпоинтов.
+        user_permissions = current_user.permissions or []
+        if "Администрирование" in user_permissions:
+            return current_user
+
         if current_user.role not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -116,3 +150,20 @@ def require_role(*roles: str):
         return current_user
 
     return role_checker
+
+
+def require_permission(*permissions: str):
+
+    async def permission_checker(current_user: User = Depends(get_current_user)) -> User:
+        user_permissions = current_user.permissions or []
+        if "Администрирование" in user_permissions:
+            return current_user
+
+        if not any(p in user_permissions for p in permissions):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Недостаточно прав. Требуется одно из permissions: {', '.join(permissions)}",
+            )
+        return current_user
+
+    return permission_checker

@@ -30,13 +30,34 @@ export interface TestSummary {
   };
 }
 
-export type UserRole = 'developer' | 'analyst' | 'manager';
+export type UserRole = 'developer' | 'analyst' | 'results_viewer' | 'user';
+export type JobTitle = 'developer' | 'analyst' | 'project_manager' | 'other';
+
+export type PermissionKey =
+  | 'Администрирование'
+  | 'GAN_менеджер_обучение'
+  | 'GAN_менеджер_генерация_данных'
+  | 'GAN_менеджер_редактирование'
+  | 'AB_тесты_создание'
+  | 'AB_тесты_управление'
+  | 'AB_тесты_удаление_и_архивация'
+  | 'Шаблоны_просмотр'
+  | 'Шаблоны_создание'
+  | 'Шаблоны_редактирование'
+  | 'Шаблоны_удаление'
+  | 'Просмотр_результатов_тестов'
+  | 'Экспорт_результатов';
 
 export interface AuthUser {
   id: number;
   username: string;
   role: UserRole;
   full_name: string;
+  job_title?: JobTitle;
+  permissions: PermissionKey[];
+  email?: string | null;
+  phone?: string | null;
+  avatar_url?: string | null;
 }
 
 export interface AuthTokenResponse {
@@ -185,4 +206,36 @@ export interface GeneratedHistoryItem {
   preview_json?: Array<Record<string, JsonValue>>;
   extra_metadata?: Record<string, JsonValue>;
   created_at?: string | null;
+}
+
+export interface AdminUser {
+  id: number;
+  username: string;
+  role: UserRole;
+  full_name: string;
+  job_title?: JobTitle;
+  permissions: PermissionKey[];
+  email?: string | null;
+  phone?: string | null;
+  avatar_url?: string | null;
+  has_avatar?: boolean;
+}
+
+export interface AdminCreateUserPayload {
+  username: string;
+  password: string;
+  full_name: string;
+  role?: UserRole;
+  job_title?: JobTitle;
+  permissions?: PermissionKey[];
+  email?: string | null;
+  phone?: string | null;
+  avatar_url?: string | null;
+}
+
+export interface ProfileUpdatePayload {
+  full_name: string;
+  email?: string | null;
+  phone?: string | null;
+  avatar_url?: string | null;
 }

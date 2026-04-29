@@ -7,6 +7,11 @@ import type {
   SyntheticGenerationPayload,
   TimeSeriesResponse,
   UserAssignmentPayload,
+  AdminUser,
+  UserRole,
+  AuthUser,
+  ProfileUpdatePayload,
+  AdminCreateUserPayload,
 } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
@@ -125,8 +130,29 @@ export const authAPI = {
       },
     });
   },
-  me: () => api.get('/auth/me', { timeout: 30000 }),
+  me: () => api.get<AuthUser>('/auth/me', { timeout: 30000 }),
+  updateProfile: (payload: ProfileUpdatePayload) => api.put<AuthUser>('/auth/me/profile', payload),
+  uploadAvatar: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post<AuthUser>('/auth/me/avatar', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000,
+    });
+  },
+  getAvatarBlob: () => api.get<Blob>('/auth/me/avatar', { responseType: 'blob', timeout: 30000 }),
   logout: () => api.post('/auth/logout'),
+};
+
+export const adminAPI = {
+  listUsers: () => api.get<{ items: AdminUser[]; count: number }>('/auth/admin/users'),
+  updateUserRole: (userId: number, role: UserRole) =>
+    api.put<AdminUser & { message: string }>(`/auth/admin/users/${userId}/role`, { role }),
+  updateUserPermissions: (userId: number, permissions: string[]) =>
+    api.put<AdminUser & { message: string }>(`/auth/admin/users/${userId}/permissions`, { permissions }),
+  createUser: (payload: AdminCreateUserPayload) =>
+    api.post<AdminUser & { message: string }>('/auth/admin/users', payload),
+  getUserAvatarBlob: (userId: number) => api.get<Blob>(`/auth/admin/users/${userId}/avatar`, { responseType: 'blob', timeout: 30000 }),
 };
 
 // Debug-утилиты

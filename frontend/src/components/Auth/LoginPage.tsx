@@ -5,22 +5,51 @@ import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import type { LoginCredentials, UserRole } from '@/types';
 
-const roleHomeRoute: Record<UserRole, string> = {
-  developer: '/ab-manager',
-  analyst: '/ab-manager',
-  manager: '/results',
+const getHomeRouteByPermissions = (permissions?: string[]): string => {
+  const p = permissions || [];
+
+  if (p.includes('Просмотр_результатов_тестов') || p.includes('Экспорт_результатов')) {
+    return '/results';
+  }
+
+  if (p.includes('AB_тесты_создание') || p.includes('AB_тесты_управление')) {
+    return '/ab-manager';
+  }
+
+  if (
+    p.includes('GAN_менеджер_обучение') ||
+    p.includes('GAN_менеджер_генерация_данных')
+  ) {
+    return '/gan-manager';
+  }
+
+  if (p.includes('Шаблоны_просмотр') || p.includes('Шаблоны_создание') || p.includes('Шаблоны_редактирование') || p.includes('Шаблоны_удаление')) {
+    return '/templates';
+  }
+
+  if (p.includes('Администрирование')) {
+    return '/admin';
+  }
+
+  return '/profile';
 };
 
 const testAccounts: { username: string; password: string; role: string; roleKey: UserRole }[] = [
-  { username: 'developer', password: 'dev123',      role: 'Developer', roleKey: 'developer' },
-  { username: 'analyst',   password: 'analyst123',  role: 'Analyst',   roleKey: 'analyst'   },
-  { username: 'manager',   password: 'manager123',  role: 'Manager',   roleKey: 'manager'   },
+  { username: 'timohinds', password: 'dev123', role: 'Разработчик', roleKey: 'developer' },
+  { username: 'gubanovaaa', password: 'analyst123', role: 'Аналитик', roleKey: 'analyst' },
+  {
+    username: 'Ivanovii',
+    password: 'manager123',
+    role: 'Проект менеджер',
+    roleKey: 'results_viewer',
+  },
 ];
 
 const roleColors: Record<UserRole, { text: string; bg: string; textDark: string; bgDark: string }> = {
   developer: { text: '#92400e', bg: '#fef3c7', textDark: '#fcd34d', bgDark: 'rgba(252,211,77,0.15)' },
-  analyst:   { text: '#065f46', bg: '#d1fae5', textDark: '#6ee7b7', bgDark: 'rgba(110,231,183,0.15)' },
-  manager:   { text: '#78350f', bg: '#fde68a', textDark: '#fbbf24', bgDark: 'rgba(251,191,36,0.15)' },
+  analyst: { text: '#065f46', bg: '#d1fae5', textDark: '#6ee7b7', bgDark: 'rgba(110,231,183,0.15)' },
+  results_viewer: { text: '#1d4ed8', bg: '#dbeafe', textDark: '#93c5fd', bgDark: 'rgba(147,197,253,0.18)' },
+  user: { text: '#6b7280', bg: '#f3f4f6', textDark: '#d1d5db', bgDark: 'rgba(209,213,219,0.15)' },
 };
 
 export const LoginPage: React.FC = () => {
@@ -34,7 +63,7 @@ export const LoginPage: React.FC = () => {
 
   useEffect(() => {
     if (isAuthenticated && user) {
-      navigate(roleHomeRoute[user.role], { replace: true });
+      navigate(getHomeRouteByPermissions(user.permissions), { replace: true });
     }
   }, [isAuthenticated, user, navigate]);
 
@@ -44,8 +73,7 @@ export const LoginPage: React.FC = () => {
     setErrorMessage(null);
     try {
       await login(credentials);
-      const role = localStorage.getItem('user_role') as UserRole | null;
-      navigate(role && roleHomeRoute[role] ? roleHomeRoute[role] : '/', { replace: true });
+      navigate('/', { replace: true });
     } catch {
       setErrorMessage('Неверный логин или пароль. Повторите попытку.');
     } finally {
@@ -60,7 +88,7 @@ export const LoginPage: React.FC = () => {
   };
 
   if (!loading && isAuthenticated && user) {
-    return <Navigate to={roleHomeRoute[user.role]} replace />;
+    return <Navigate to={getHomeRouteByPermissions(user.permissions)} replace />;
   }
 
   const isDark = theme === 'dark';

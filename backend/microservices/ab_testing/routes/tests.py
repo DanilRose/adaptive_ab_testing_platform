@@ -11,7 +11,7 @@ from backend.microservices.ab_testing_core.core import MetricType, TestConfig
 from backend.microservices.ab_testing_core.statistics import SampleSizeCalculator
 from backend.microservices.ab_testing.service import ABPlatformProvider
 from backend.microservices.auth_core.models import User
-from backend.microservices.auth_core.service import get_current_user, require_role
+from backend.microservices.auth_core.service import get_current_user, require_permission
 from backend.microservices.database import crud
 from backend.microservices.database.session import get_db
 from backend.microservices.ab_testing import ABTestLifecycleService
@@ -163,7 +163,7 @@ def _resolve_sample_size(
 @router.post("/", summary="Создать новый A/B тест")
 async def create_test(
     request: TestCreateRequest,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("AB_тесты_создание")),
     db: Session = Depends(get_db),
 ):
     try:
@@ -259,7 +259,7 @@ async def create_test(
 async def assign_user(
     test_id: str,
     request: UserAssignmentRequest,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("AB_тесты_управление")),
 ):
     try:
         assignment = platform.assign_user_to_test(
@@ -281,7 +281,7 @@ async def assign_user(
 @router.post("/metrics/record", summary="Записать метрику пользователя")
 async def record_metric(
     request: MetricRecordRequest,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("AB_тесты_управление")),
 ):
     try:
         record_result = platform.record_user_metric(
@@ -306,7 +306,7 @@ async def record_metric(
 @router.post("/sessions/complete", summary="Завершить сессию пользователя")
 async def complete_session(
     request: SessionCompleteRequest,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("AB_тесты_управление")),
 ):
     try:
         platform.complete_user_session(
@@ -339,7 +339,7 @@ async def get_test_results(test_id: str, current_user: User = Depends(get_curren
 async def stop_test(
     test_id: str,
     request: TestStopRequest,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("AB_тесты_удаление_и_архивация")),
     db: Session = Depends(get_db),
 ):
     try:
@@ -455,7 +455,7 @@ async def get_test_history(limit: int = 50, current_user: User = Depends(get_cur
 @router.delete("/{test_id}", summary="Удалить тест")
 async def delete_test(
     test_id: str,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("AB_тесты_удаление_и_архивация")),
     db: Session = Depends(get_db),
 ):
     """Permanently delete a test"""
@@ -486,7 +486,7 @@ async def start_simulation(
     test_id: str,
     request: StartSimulationRequest,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("AB_тесты_управление")),
     db: Session = Depends(get_db),
 ):
     """
@@ -526,7 +526,7 @@ async def start_simulation(
 async def pause_test(
     test_id: str,
     request: Optional[TestPauseRequest] = None,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("AB_тесты_управление")),
     db: Session = Depends(get_db),
 ):
     """
@@ -546,7 +546,7 @@ async def pause_test(
 @router.post("/{test_id}/resume", summary="Продолжить тест")
 async def resume_test(
     test_id: str,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("AB_тесты_управление")),
     db: Session = Depends(get_db),
 ):
     """
@@ -567,7 +567,7 @@ async def resume_test(
 async def delete_test_with_option(
     test_id: str,
     request: TestDeleteRequest,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("AB_тесты_удаление_и_архивация")),
     db: Session = Depends(get_db),
 ):
     """
@@ -591,7 +591,7 @@ async def archive_test(
     test_id: str,
     request: Optional[TestArchiveRequest] = None,
     reason: Optional[str] = Query(None, description="Причина архивирования (legacy query-param)"),
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("AB_тесты_удаление_и_архивация")),
     db: Session = Depends(get_db),
 ):
     """
@@ -612,7 +612,7 @@ async def archive_test(
 @router.delete("/{test_id}/permanent", summary="Полностью удалить тест из архива")
 async def permanently_delete_test(
     test_id: str,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("AB_тесты_удаление_и_архивация")),
     db: Session = Depends(get_db),
 ):
     """

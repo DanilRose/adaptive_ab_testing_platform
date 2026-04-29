@@ -1,19 +1,22 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { LogOut, Moon, Sun, User, ChevronDown } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useTheme } from '@/context/ThemeContext';
 import { useAuth } from '@/context/AuthContext';
 import type { UserRole } from '@/types';
 
 const roleLabels: Record<UserRole, { label: string; color: string; bg: string }> = {
-  developer: { label: 'Developer', color: '#92400e', bg: '#fef3c7' },
-  analyst:   { label: 'Analyst',   color: '#065f46', bg: '#d1fae5' },
-  manager:   { label: 'Manager',   color: '#78350f', bg: '#fde68a' },
+  developer: { label: 'Разработчик', color: '#92400e', bg: '#fef3c7' },
+  analyst: { label: 'Аналитик', color: '#065f46', bg: '#d1fae5' },
+  results_viewer: { label: 'Просмотр_результатов_тестов', color: '#1d4ed8', bg: '#dbeafe' },
+  user: { label: '', color: '#6b7280', bg: '#f3f4f6' },
 };
 
 const roleLabels_dark: Record<UserRole, { label: string; color: string; bg: string }> = {
-  developer: { label: 'Developer', color: '#fcd34d', bg: 'rgba(252,211,77,0.12)' },
-  analyst:   { label: 'Analyst',   color: '#6ee7b7', bg: 'rgba(110,231,183,0.12)' },
-  manager:   { label: 'Manager',   color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' },
+  developer: { label: 'Разработчик', color: '#fcd34d', bg: 'rgba(252,211,77,0.12)' },
+  analyst: { label: 'Аналитик', color: '#6ee7b7', bg: 'rgba(110,231,183,0.12)' },
+  results_viewer: { label: 'Просмотр_результатов_тестов', color: '#93c5fd', bg: 'rgba(147,197,253,0.16)' },
+  user: { label: '', color: '#d1d5db', bg: 'rgba(209,213,219,0.12)' },
 };
 
 interface HeaderProps {
@@ -23,9 +26,34 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = () => {
   const { theme, toggleTheme } = useTheme();
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const isDark = theme === 'dark';
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [themeHover, setThemeHover] = useState(false);
+
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let revokedUrl: string | null = null;
+
+    const loadAvatar = async () => {
+      try {
+        const { authAPI } = await import('@/utils/api');
+        const response = await authAPI.getAvatarBlob();
+        const blobUrl = URL.createObjectURL(response.data);
+        revokedUrl = blobUrl;
+        setAvatarUrl(blobUrl);
+      } catch {
+        setAvatarUrl(null);
+      }
+    };
+
+    void loadAvatar();
+
+    return () => {
+      if (revokedUrl) URL.revokeObjectURL(revokedUrl);
+    };
+  }, [user?.id, user?.full_name]);
 
   const getInitials = (name: string): string =>
     name.split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2);
@@ -63,13 +91,13 @@ export const Header: React.FC<HeaderProps> = () => {
     }}>
       {/* Left — role badge */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        {roleInfo && (
+        {roleInfo?.label && (
           <span style={{
             fontSize: '16px',
-            fontWeight: '600',
-            color: roleInfo.color,
-            backgroundColor: roleInfo.bg,
-            padding: '6px 14px',
+            fontWeight: '500',
+            color: '#9ca3af',
+            backgroundColor: 'transparent',
+            padding: '6px 4px',
             borderRadius: '6px',
             letterSpacing: '0.2px',
           }}>
@@ -131,9 +159,9 @@ export const Header: React.FC<HeaderProps> = () => {
             >
               {/* Avatar */}
               <div style={{
-                width: '28px',
-                height: '28px',
-                borderRadius: '6px',
+                width: '36px',
+                height: '36px',
+                borderRadius: '8px',
                 backgroundColor: c.avatarBg,
                 display: 'flex',
                 alignItems: 'center',
@@ -143,16 +171,21 @@ export const Header: React.FC<HeaderProps> = () => {
                 color: c.avatarText,
                 flexShrink: 0,
                 letterSpacing: '0.5px',
+                overflow: 'hidden',
+                border: `1px solid ${c.border}`,
               }}>
-                {getInitials(user.full_name)}
+                {avatarUrl ? (
+                  <img src={avatarUrl} alt="avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>
+                    {getInitials(user.full_name)}
+                  </span>
+                )}
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
                 <span style={{ fontSize: '16px', fontWeight: '600', color: c.textPrimary, lineHeight: 1.3 }}>
                   {user.full_name}
-                </span>
-                <span style={{ fontSize: '14px', color: c.textMuted, lineHeight: 1.3 }}>
-                  @{user.username}
                 </span>
               </div>
 
@@ -195,16 +228,13 @@ export const Header: React.FC<HeaderProps> = () => {
                     <div style={{ fontSize: '16px', fontWeight: '600', color: c.textPrimary }}>
                       {user.full_name}
                     </div>
-                    <div style={{ fontSize: '14px', color: c.textMuted, marginTop: '2px' }}>
-                      @{user.username}
-                    </div>
                   </div>
 
                   <div style={{ padding: '4px' }}>
                     <DropdownItem
                       icon={<User size={14} />}
                       label="Профиль"
-                      onClick={() => setDropdownOpen(false)}
+                      onClick={() => { setDropdownOpen(false); navigate('/profile'); }}
                       hoverBg={c.dropdownHover}
                       textColor={c.textPrimary}
                     />

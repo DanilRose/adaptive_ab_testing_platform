@@ -17,6 +17,7 @@ import {
 import { dataAPI, templatesAPI } from '../../utils/api';
 import type { GANTrainingPayload, GeneratedHistoryItem, SyntheticGenerationPayload } from '../../types';
 import { useTheme } from '@/context/ThemeContext';
+import { useAuth } from '@/context/AuthContext';
 
 type TemplateType = 'gan_config' | 'synthetic_data';
 
@@ -322,6 +323,7 @@ const buildAppliedFiltersSummary = (draft: Record<string, unknown>): string[] =>
 
 export const GANManager: React.FC = () => {
   const { theme } = useTheme();
+  const { user } = useAuth();
   const isDark = theme === 'dark';
 
   const c = useMemo(
@@ -492,10 +494,25 @@ export const GANManager: React.FC = () => {
     confirmDeleteHistoryItem,
   ]);
 
+  const userPermissions = user?.permissions || [];
+  const canManageTraining = userPermissions.includes('GAN_менеджер_обучение');
+  const canManageGeneration = userPermissions.includes('GAN_менеджер_генерация_данных');
+  const canDelete = userPermissions.includes('GAN_менеджер_редактирование');
+  const showCheckpointsInSynthetic = canManageGeneration && !canManageTraining;
+
   const isTraining = ganStatus.status === 'training';
   const isStopped = ganStatus.status === 'training_paused';
   const isTrainingOrStopped = isTraining || isStopped;
-  const canGenerateSynthetic = Boolean(ganStatus.is_trained) || ganStatus.status === 'checkpoint_loaded';
+  const canGenerateSynthetic = canManageGeneration && (Boolean(ganStatus.is_trained) || ganStatus.status === 'checkpoint_loaded');
+
+  useEffect(() => {
+    if (activeTab === 'train' && !canManageTraining && canManageGeneration) {
+      setActiveTab('synthetic');
+    }
+    if (activeTab === 'synthetic' && !canManageGeneration && canManageTraining) {
+      setActiveTab('train');
+    }
+  }, [activeTab, canManageTraining, canManageGeneration]);
 
   const getFriendlyStatus = (): string => {
     if (ganStatus.status === 'checkpoint_not_loaded' || !ganStatus.status) return 'Чекпоинт не загружен';
@@ -923,11 +940,15 @@ export const GANManager: React.FC = () => {
       )}
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-        <PillTab active={activeTab === 'train'} onClick={() => setActiveTab('train')} label="Конфигурация и обучение GAN" c={c} />
-        <PillTab active={activeTab === 'synthetic'} onClick={() => setActiveTab('synthetic')} label="Генерация синтетических данных" c={c} />
+        {canManageTraining && (
+          <PillTab active={activeTab === 'train'} onClick={() => setActiveTab('train')} label="Конфигурация и обучение GAN" c={c} />
+        )}
+        {canManageGeneration && (
+          <PillTab active={activeTab === 'synthetic'} onClick={() => setActiveTab('synthetic')} label="Генерация синтетических данных" c={c} />
+        )}
       </div>
 
-      {activeTab === 'train' ? (
+      {activeTab === 'train' && canManageTraining ? (
         <Panel c={c} title="Обучение и чекпоинты" icon={<Cpu size={14} />}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
             <ActionButton
@@ -1115,7 +1136,9 @@ export const GANManager: React.FC = () => {
                       label="Загрузить"
                       tone="load"
                     />
-                    <RowActionButton onClick={() => setConfirmDeleteCheckpoint(checkpoint)} c={c} icon={<Trash2 size={14} />} label="Удалить" tone="danger" />
+                    {canDelete && (
+                      <RowActionButton onClick={() => setConfirmDeleteCheckpoint(checkpoint)} c={c} icon={<Trash2 size={14} />} label="Удалить" tone="danger" />
+                    )}
                   </div>
                 </div>
               ))
@@ -1382,6 +1405,51 @@ export const GANManager: React.FC = () => {
             </div>
           )}
 
+          {showCheckpointsInSynthetic && (
+            <>
+              <SectionTitle c={c}>Доступные чекпоинты</SectionTitle>
+              <div style={{ border: `1px solid ${c.border}`, borderRadius: 12, overflow: 'hidden', marginBottom: 12 }}>
+                {checkpoints.length === 0 ? (
+                  <EmptyState c={c} text="Нет доступных чекпоинтов" />
+                ) : (
+                  checkpoints.map((checkpoint, idx) => (
+                    <div
+                      key={checkpoint.id}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 10,
+                        padding: '12px 14px',
+                        borderBottom: idx < checkpoints.length - 1 ? `1px solid ${c.border}` : 'none',
+                        background: c.panelBg,
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 600 }}>{checkpoint.name || checkpoint.filename || 'Без имени'}</div>
+                        <div style={{ fontSize: 12, color: c.textMuted, marginTop: 2 }}>
+                          Размер: {checkpoint.metrics?.size ? `${(checkpoint.metrics.size / 1024 / 1024).toFixed(2)} МБ` : 'Н/Д'} · Изменён: {formatDate(checkpoint.created_at)}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <RowActionButton
+                          onClick={() => handleLoadCheckpoint(checkpoint.name || checkpoint.filename || '')}
+                          disabled={isTrainingOrStopped || !(checkpoint.name || checkpoint.filename)}
+                          c={c}
+                          label="Загрузить"
+                          tone="load"
+                        />
+                        {canDelete && (
+                          <RowActionButton onClick={() => setConfirmDeleteCheckpoint(checkpoint)} c={c} icon={<Trash2 size={14} />} label="Удалить" tone="danger" />
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </>
+          )}
+
           <SectionTitle c={c}>История генераций</SectionTitle>
           <div style={{ border: `1px solid ${c.border}`, borderRadius: 12, overflow: 'hidden' }}>
             {historyLoading ? (
@@ -1424,7 +1492,9 @@ export const GANManager: React.FC = () => {
                         label="Скачать CSV"
                         tone="download"
                       />
-                      <RowActionButton onClick={() => setConfirmDeleteHistoryItem(item)} c={c} icon={<Trash2 size={14} />} label="Удалить" tone="danger" />
+                      {canDelete && (
+                        <RowActionButton onClick={() => setConfirmDeleteHistoryItem(item)} c={c} icon={<Trash2 size={14} />} label="Удалить" tone="danger" />
+                      )}
                     </div>
                   </div>
                 ))

@@ -23,6 +23,104 @@ def get_user_by_username(db: Session, username: str) -> Optional[UserORM]:
     return db.query(UserORM).filter(UserORM.username == username).first()
 
 
+def list_users(db: Session, limit: int = 500) -> list[UserORM]:
+    return db.query(UserORM).order_by(UserORM.id.asc()).limit(limit).all()
+
+
+def update_user_role(db: Session, user_id: int, role: str) -> Optional[UserORM]:
+    # legacy-поле role сохраняем только для обратной совместимости,
+    # в новой модели доступ определяется permissions_json.
+    user = db.query(UserORM).filter(UserORM.id == user_id).first()
+    if user is None:
+        return None
+    user.role = role
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def update_user_permissions(db: Session, user_id: int, permissions: list[str]) -> Optional[UserORM]:
+    user = db.query(UserORM).filter(UserORM.id == user_id).first()
+    if user is None:
+        return None
+
+    deduplicated = list(dict.fromkeys([p.strip() for p in permissions if p and p.strip()]))
+    user.permissions_json = deduplicated
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def create_user(
+    db: Session,
+    *,
+    username: str,
+    hashed_password: str,
+    full_name: str,
+    role: str = "user",
+    job_title: Optional[str] = None,
+    permissions: Optional[list[str]] = None,
+    email: Optional[str] = None,
+    phone: Optional[str] = None,
+    avatar_url: Optional[str] = None,
+) -> UserORM:
+    entity = UserORM(
+        username=username,
+        hashed_password=hashed_password,
+        full_name=full_name,
+        role=role,
+        job_title=job_title,
+        permissions_json=list(dict.fromkeys([p.strip() for p in (permissions or []) if p and p.strip()])),
+        email=email,
+        phone=phone,
+        avatar_url=avatar_url,
+    )
+    db.add(entity)
+    db.commit()
+    db.refresh(entity)
+    return entity
+
+
+def update_user_profile(
+    db: Session,
+    *,
+    user_id: int,
+    full_name: str,
+    email: Optional[str],
+    phone: Optional[str],
+    avatar_url: Optional[str],
+) -> Optional[UserORM]:
+    user = db.query(UserORM).filter(UserORM.id == user_id).first()
+    if user is None:
+        return None
+
+    user.full_name = full_name
+    user.email = email
+    user.phone = phone
+    user.avatar_url = avatar_url
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def update_user_avatar_blob(
+    db: Session,
+    *,
+    user_id: int,
+    avatar_blob: bytes,
+    mime_type: str,
+) -> Optional[UserORM]:
+    user = db.query(UserORM).filter(UserORM.id == user_id).first()
+    if user is None:
+        return None
+
+    user.avatar_blob = avatar_blob
+    user.avatar_mime_type = mime_type
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def create_ab_test(
     db: Session,
     *,

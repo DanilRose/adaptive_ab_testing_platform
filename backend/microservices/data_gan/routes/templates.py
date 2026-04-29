@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.microservices.auth_core.models import User
-from backend.microservices.auth_core.service import require_role
+from backend.microservices.auth_core.service import require_permission
 from backend.microservices.database import crud
 from backend.microservices.database.session import get_db
 
@@ -59,7 +59,7 @@ class TemplateResponse(BaseModel):
 async def list_templates(
     template_type: Optional[str] = Query(None, description="Фильтр по типу: gan_config | synthetic_data | ab_test"),
     limit: int = Query(100, ge=1, le=500),
-    current_user: User = Depends(require_role("developer", "analyst", "manager")),
+    current_user: User = Depends(require_permission("Шаблоны_просмотр", "Шаблоны_создание", "Шаблоны_редактирование", "Шаблоны_удаление")),
     db: Session = Depends(get_db),
 ):
     """Получить список всех шаблонов (с возможностью фильтрации по типу)."""
@@ -86,7 +86,7 @@ async def list_templates(
 @router.post("/", summary="Создать шаблон")
 async def create_template(
     body: TemplateCreateRequest,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("Шаблоны_создание")),
     db: Session = Depends(get_db),
 ):
     """Создать новый шаблон."""
@@ -110,7 +110,7 @@ async def create_template(
 @router.get("/{template_id}", summary="Получить шаблон по ID")
 async def get_template(
     template_id: int,
-    current_user: User = Depends(require_role("developer", "analyst", "manager")),
+    current_user: User = Depends(require_permission("Шаблоны_просмотр", "Шаблоны_редактирование", "Шаблоны_удаление")),
     db: Session = Depends(get_db),
 ):
     """Получить детали конкретного шаблона."""
@@ -134,7 +134,7 @@ async def get_template(
 async def update_template(
     template_id: int,
     body: TemplateUpdateRequest,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("Шаблоны_редактирование")),
     db: Session = Depends(get_db),
 ):
     """Обновить существующий шаблон."""
@@ -159,7 +159,7 @@ async def update_template(
 @router.delete("/{template_id}", summary="Удалить шаблон")
 async def delete_template(
     template_id: int,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(require_permission("Шаблоны_удаление")),
     db: Session = Depends(get_db),
 ):
     """Удалить шаблон по ID."""
@@ -171,7 +171,7 @@ async def delete_template(
 
 @router.post("/seed-defaults", summary="Создать стандартные шаблоны")
 async def seed_default_templates(
-    current_user: User = Depends(require_role("developer")),
+    current_user: User = Depends(require_permission("Шаблоны_создание")),
     db: Session = Depends(get_db),
 ):
     """Создать стандартные шаблоны (только если база пустая)."""

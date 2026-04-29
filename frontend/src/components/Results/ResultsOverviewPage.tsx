@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react';
-import { Alert, Card, Col, Row, Space, Statistic, Table, Tag, Typography } from 'antd';
+import { Alert, Col, Row, Space, Table, Tag, Typography } from 'antd';
 import { CheckCircleOutlined, WarningOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
+import { useTheme } from '@/context/ThemeContext';
 import type { ResultsOutletContext } from './ResultsSectionPage';
 
 const { Text } = Typography;
@@ -20,6 +21,27 @@ const recommendationLabel: Record<string, { label: string; color: string }> = {
 
 export const ResultsOverviewPage: React.FC = () => {
   const { timeSeriesData, financialImpact } = useOutletContext<ResultsOutletContext>();
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+
+  const c = useMemo(
+    () => ({
+      panelBg: isDark ? '#1c1917' : '#ffffff',
+      panelSoft: isDark ? '#171412' : '#f5f0e8',
+      border: isDark ? '#292524' : '#e7e5e4',
+      textPrimary: isDark ? '#fafaf9' : '#1c1917',
+      textMuted: isDark ? '#a8a29e' : '#78716c',
+      textSub: isDark ? '#57534e' : '#a8a29e',
+      accent: '#d97706',
+      accentSoft: isDark ? 'rgba(217,119,6,0.16)' : '#fef3c7',
+      accentText: isDark ? '#fcd34d' : '#92400e',
+      successSoft: isDark ? 'rgba(34,197,94,0.12)' : '#ecfdf3',
+      dangerSoft: isDark ? 'rgba(239,68,68,0.12)' : '#fef2f2',
+      infoSoft: isDark ? 'rgba(59,130,246,0.12)' : '#eff6ff',
+      shadow: isDark ? '0 12px 38px rgba(0,0,0,0.38)' : '0 10px 30px rgba(28,25,23,0.08)',
+    }),
+    [isDark],
+  );
 
   const chartData = useMemo(() => {
     if (!timeSeriesData?.data) return [];
@@ -101,18 +123,18 @@ export const ResultsOverviewPage: React.FC = () => {
         render: (v: number) => v.toLocaleString('ru-RU'),
       },
       {
-        title: 'Средняя метрика',
+        title: 'Среднее значение',
         dataIndex: 'mean_metric',
         key: 'mean_metric',
         render: (v: string) => <Text strong>{v}</Text>,
       },
       {
-        title: 'Накопленная метрика',
+        title: 'Накопленное значение',
         dataIndex: 'cumulative_metric',
         key: 'cumulative_metric',
       },
       {
-        title: 'Прирост относительно контроля',
+        title: 'Прирост к контролю',
         dataIndex: 'uplift',
         key: 'uplift',
         render: (uplift: string, record: any) => {
@@ -125,7 +147,7 @@ export const ResultsOverviewPage: React.FC = () => {
         },
       },
       {
-        title: 'p-значение (метод Холма, скорректированное)',
+        title: 'Скорректированное p-значение (Холм)',
         dataIndex: 'p_value_corrected',
         key: 'p_value_corrected',
         render: (v: string, record: any) => {
@@ -134,7 +156,7 @@ export const ResultsOverviewPage: React.FC = () => {
         },
       },
       {
-        title: 'p-значение (сырое)',
+        title: 'Сырое p-значение',
         dataIndex: 'p_value_raw',
         key: 'p_value_raw',
         render: (v: string, record: any) => {
@@ -143,32 +165,34 @@ export const ResultsOverviewPage: React.FC = () => {
         },
       },
       {
-        title: 'Статистическая значимость',
+        title: 'Значимость',
         key: 'significant',
         render: (_: any, record: any) => {
           if (record.is_control) return <Tag color="default">Контроль</Tag>;
           return record.significant ? (
-            <Tag icon={<CheckCircleOutlined />} color="success">Значимо (скорректированное p {'<'} 0.05)</Tag>
+            <Tag icon={<CheckCircleOutlined />} color="success">Статистически значимо</Tag>
           ) : (
-            <Tag icon={<WarningOutlined />} color="warning">Незначимо (скорректированное p ≥ 0.05)</Tag>
+            <Tag icon={<WarningOutlined />} color="warning">Статистически незначимо</Tag>
           );
         },
       },
     ];
 
     return (
-      <Card
-        title="Итоговая таблица результатов A/B теста"
-        size="small"
-      >
-        <Table
-          columns={columns}
-          dataSource={tableData}
-          rowKey="variant"
-          pagination={false}
-          size="small"
-        />
-      </Card>
+      <div style={{ borderRadius: 14, border: `1px solid ${c.border}`, backgroundColor: c.panelBg, boxShadow: c.shadow, overflow: 'hidden' }}>
+        <div style={{ padding: '12px 14px', borderBottom: `1px solid ${c.border}`, backgroundColor: c.panelSoft, fontSize: 14, fontWeight: 700, color: c.textPrimary }}>
+          Итоговая таблица результатов теста
+        </div>
+        <div style={{ padding: 14 }}>
+          <Table
+            columns={columns}
+            dataSource={tableData}
+            rowKey="variant"
+            pagination={false}
+            size="small"
+          />
+        </div>
+      </div>
     );
   };
 
@@ -177,44 +201,53 @@ export const ResultsOverviewPage: React.FC = () => {
 
   return (
     <>
+
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col span={6}>
-          <Card size="small" title="Победитель">
+          <MetricCard title="Победитель" c={c}>
             {timeSeriesData?.winner ? (
               <Space direction="vertical" size={4}>
                 <Tag color="success">Вариант {timeSeriesData.winner}</Tag>
-                <Text strong type="success">Uplift: +{timeSeriesData.winner_uplift_percent.toFixed(2)}%</Text>
+                <Text strong type="success">Прирост: +{timeSeriesData.winner_uplift_percent.toFixed(2)}%</Text>
               </Space>
             ) : (
               <Tag color="default">Победитель не определён</Tag>
             )}
-          </Card>
+          </MetricCard>
         </Col>
 
         <Col span={6}>
-          <Card size="small" title="Confidence">
+          <MetricCard title="Уровень уверенности" c={c}>
             <Tag color={confidenceLabel[timeSeriesData?.winner_confidence || 'low']?.color || 'default'}>
               {confidenceLabel[timeSeriesData?.winner_confidence || 'low']?.label || 'Н/Д'}
             </Tag>
-          </Card>
+          </MetricCard>
         </Col>
 
         <Col span={6}>
-          <Card size="small" title="Валидность анализа">
+          <MetricCard title="Валидность анализа" c={c}>
             <Tag color={timeSeriesData?.analysis_validity === 'valid_for_inference' ? 'success' : 'error'}>
-              {timeSeriesData?.analysis_validity || 'unknown'}
+              {timeSeriesData?.analysis_validity === 'valid_for_inference'
+                ? 'Валиден для итогового вывода'
+                : timeSeriesData?.analysis_validity === 'exploration_only'
+                  ? 'Только исследовательский режим'
+                  : timeSeriesData?.analysis_validity === 'invalid_srm'
+                    ? 'Невалиден: перекос трафика'
+                    : timeSeriesData?.analysis_validity === 'invalid_guardrails'
+                      ? 'Невалиден: нарушены защитные метрики'
+                      : 'Неизвестно'}
             </Tag>
-          </Card>
+          </MetricCard>
         </Col>
 
         <Col span={6}>
-          <Card size="small" title="SRM / Guardrails / Quality Gate">
-            <Space wrap>
+          <MetricCard title="Проверки корректности" c={c}>
+            <Space direction="vertical" size={6} style={{ width: '100%' }}>
               <Tag color={timeSeriesData?.srm_check_passed ? 'success' : 'error'}>
-                SRM: {timeSeriesData?.srm_check_passed ? 'PASS' : 'FAIL'}
+                Равномерность распределения пользователей: {timeSeriesData?.srm_check_passed ? 'норма' : 'есть перекос'}
               </Tag>
               <Tag color={timeSeriesData?.guardrails?.passed ? 'success' : 'error'}>
-                Guardrails: {timeSeriesData?.guardrails?.passed ? 'PASS' : 'FAIL'}
+                Защитные бизнес-ограничения: {timeSeriesData?.guardrails?.passed ? 'соблюдены' : 'нарушены'}
               </Tag>
               <Tag
                 color={
@@ -225,73 +258,71 @@ export const ResultsOverviewPage: React.FC = () => {
                       : 'warning'
                 }
               >
-                QG: {(timeSeriesData?.quality_gate?.status || 'yellow').toUpperCase()}
+                Общая оценка качества данных: {timeSeriesData?.quality_gate?.status === 'green'
+                  ? 'высокая'
+                  : timeSeriesData?.quality_gate?.status === 'red'
+                    ? 'низкая'
+                    : 'средняя'}
               </Tag>
             </Space>
-          </Card>
+          </MetricCard>
         </Col>
       </Row>
 
-      <Card title="Рекомендация к внедрению" size="small" style={{ marginBottom: 16 }}>
-        <Space direction="vertical" size={8} style={{ width: '100%' }}>
-          <Tag color={recommendation.color} style={{ width: 'fit-content', fontSize: 14, padding: '4px 12px' }}>
-            {recommendation.label}
-          </Tag>
+      <div style={{ borderRadius: 14, border: `1px solid ${c.border}`, backgroundColor: c.panelBg, boxShadow: c.shadow, overflow: 'hidden', marginBottom: 16 }}>
+        <div style={{ padding: '12px 14px', borderBottom: `1px solid ${c.border}`, backgroundColor: c.panelSoft, fontSize: 14, fontWeight: 700, color: c.textPrimary }}>
+          Рекомендация к внедрению
+        </div>
+        <div style={{ padding: 14 }}>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <Tag color={recommendation.color} style={{ width: 'fit-content', fontSize: 14, padding: '4px 12px' }}>
+              {recommendation.label}
+            </Tag>
 
-          {(timeSeriesData?.recommendation_reason || []).length > 0 ? (
-            <ul style={{ margin: 0, paddingLeft: 20 }}>
-              {(timeSeriesData?.recommendation_reason || []).map((reason, idx) => (
-                <li key={`${reason}-${idx}`}>
-                  <Text>{reason}</Text>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <Text type="secondary">Причины решения не предоставлены сервером</Text>
-          )}
+            {(timeSeriesData?.recommendation_reason || []).length > 0 ? (
+              <ul style={{ margin: 0, paddingLeft: 20 }}>
+                {(timeSeriesData?.recommendation_reason || []).map((reason, idx) => (
+                  <li key={`${reason}-${idx}`}>
+                    <Text>{reason}</Text>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <Text type="secondary">Причины решения не предоставлены сервером</Text>
+            )}
 
-          {timeSeriesData?.rollout_hint && (
-            <Alert
-              type="info"
-              showIcon
-              message={`Подсказка по rollout: ${timeSeriesData.rollout_hint}`}
-            />
-          )}
-        </Space>
-      </Card>
+            {timeSeriesData?.rollout_hint && (
+              <Alert
+                type="info"
+                showIcon
+                message={`Подсказка по поэтапному запуску: ${timeSeriesData.rollout_hint}`}
+              />
+            )}
+          </Space>
+        </div>
+      </div>
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col span={8}>
-          <Card size="small">
-            <Statistic
-              title="Инкрементальная выручка (significance-gated)"
-              value={financialImpact?.financial_analysis?.incremental_revenue || 0}
-              precision={2}
-              suffix="₽"
-            />
-          </Card>
-        </Col>
-        <Col span={8}>
-          <Card size="small">
-            <Statistic
-              title="Лучший наблюдаемый эффект"
-              value={financialImpact?.financial_analysis?.best_observed_incremental_revenue || 0}
-              precision={2}
-              suffix="₽"
-            />
-          </Card>
-        </Col>
-        <Col span={8}>
-          <Card size="small" title="Рекомендуемый вариант">
-            <Tag color="blue">{financialImpact?.financial_analysis?.best_variant || 'Нет'}</Tag>
-            <div style={{ marginTop: 8 }}>
-              <Text type="secondary">Assumed ARPU: {financialImpact?.assumed_arpu ?? 100}</Text>
-            </div>
-          </Card>
-        </Col>
-      </Row>
+      {financialImpact?.financial_analysis?.best_variant && (
+        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+          <Col span={24}>
+            <MetricCard title="Финансовая оценка" c={c}>
+              <Tag color="blue">Наиболее выгодный вариант: {financialImpact.financial_analysis.best_variant}</Tag>
+              <div style={{ marginTop: 8 }}>
+                <Text type="secondary">Базовый доход на пользователя для расчёта: {financialImpact?.assumed_arpu ?? 100}</Text>
+              </div>
+            </MetricCard>
+          </Col>
+        </Row>
+      )}
 
       {renderResultsTable()}
     </>
   );
 };
+
+const MetricCard: React.FC<{ title: string; c: Record<string, string>; children: React.ReactNode }> = ({ title, c, children }) => (
+  <div style={{ borderRadius: 12, border: `1px solid ${c.border}`, backgroundColor: c.panelBg, boxShadow: c.shadow, overflow: 'hidden', height: '100%' }}>
+    <div style={{ padding: '10px 12px', borderBottom: `1px solid ${c.border}`, backgroundColor: c.panelSoft, fontSize: 13, fontWeight: 700 }}>{title}</div>
+    <div style={{ padding: 12 }}>{children}</div>
+  </div>
+);

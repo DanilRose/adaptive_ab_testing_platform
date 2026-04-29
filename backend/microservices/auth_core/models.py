@@ -6,9 +6,7 @@ from typing import Optional
 
 
 class UserRole(str, Enum):
-    developer = "developer"
-    analyst = "analyst"
-    manager = "manager"
+    user = "user"
 
 
 class User(BaseModel):
@@ -16,6 +14,11 @@ class User(BaseModel):
     username: str
     role: UserRole
     full_name: str
+    job_title: Optional[str] = None
+    permissions: list[str] = []
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 
 class UserInDB(User):

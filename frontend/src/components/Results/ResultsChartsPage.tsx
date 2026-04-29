@@ -16,6 +16,7 @@ import {
 } from 'recharts';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
+import { useTheme } from '@/context/ThemeContext';
 import type { ResultsOutletContext } from './ResultsSectionPage';
 
 const { Option } = Select;
@@ -25,56 +26,75 @@ const CHART_DESCRIPTIONS: Record<string, { title: string; description: string; w
   cumulative: {
     title: 'Накопленная метрика',
     description: 'Суммарное значение целевой метрики по каждому варианту по мере роста объёма данных.',
-    whatItShows: 'X — пользователи, Y — накопленная метрика, линия — вариант.',
-    howToRead: 'Линия выше — выше совокупный эффект.',
+    whatItShows: 'Ось X — пользователи, ось Y — накопленная метрика, линия — вариант.',
+    howToRead: 'Линия выше означает больший совокупный эффект.',
     impact: 'Показывает абсолютный бизнес-эффект.',
   },
   mean: {
-    title: 'Средняя метрика',
-    description: 'Среднее значение метрики на пользователя в динамике.',
-    whatItShows: 'X — пользователи, Y — средняя метрика на пользователя.',
-    howToRead: 'Устойчивая линия выше контроля указывает на лучший вариант.',
-    impact: 'Основа для расчёта uplift и выбора победителя.',
+    title: 'Среднее значение метрики',
+    description: 'Среднее значение метрики на одного пользователя в динамике.',
+    whatItShows: 'Ось X — пользователи, ось Y — среднее значение метрики.',
+    howToRead: 'Устойчивая линия выше контроля указывает на более сильный вариант.',
+    impact: 'Основа для расчёта прироста и выбора победителя.',
   },
   ci: {
     title: 'Доверительные интервалы',
     description: '95% доверительные интервалы оценки метрики по вариантам.',
-    whatItShows: 'Нижняя/верхняя граница ДИ в динамике.',
-    howToRead: 'Меньше пересечений ДИ — выше уверенность в различиях.',
+    whatItShows: 'Нижняя и верхняя границы доверительного интервала во времени.',
+    howToRead: 'Чем меньше пересечений интервалов, тем выше уверенность в различиях.',
     impact: 'Показывает надёжность оценок.',
   },
   pvalue: {
-    title: 'p-value (raw)',
-    description: 'Сырые p-значения как мониторинговый сигнал.',
-    whatItShows: 'Линии p-value и порог 0.05.',
-    howToRead: 'Ниже 0.05 — сигнал, но финальное решение по corrected p-value.',
-    impact: 'Мониторинг статистической динамики.',
+    title: 'Сырое p-значение',
+    description: 'Сырые p-значения как оперативный сигнал наблюдения.',
+    whatItShows: 'Линии p-значения и порог 0.05.',
+    howToRead: 'Ниже 0.05 — сигнал внимания, но решение по скорректированному p-значению.',
+    impact: 'Нужно для мониторинга статистической динамики.',
   },
   uplift: {
-    title: 'Uplift vs control',
-    description: 'Процентный прирост варианта относительно контроля.',
-    whatItShows: 'X — пользователи, Y — uplift %.',
+    title: 'Прирост к контролю',
+    description: 'Процентный прирост варианта относительно контрольной группы.',
+    whatItShows: 'Ось X — пользователи, ось Y — прирост в процентах.',
     howToRead: 'Стабильно выше нуля — положительный эффект.',
-    impact: 'Ключевой бизнес-показатель прироста.',
+    impact: 'Ключевой бизнес-показатель роста.',
   },
   power: {
-    title: 'Power',
+    title: 'Статистическая мощность',
     description: 'Статистическая мощность по мере накопления выборки.',
-    whatItShows: 'Y от 0 до 1, ориентир 0.8.',
-    howToRead: 'Значения < 0.8 — риск недообнаружения эффекта.',
-    impact: 'Оценивает достаточность данных.',
+    whatItShows: 'Ось Y от 0 до 1, ориентир 0.8.',
+    howToRead: 'Значения ниже 0.8 указывают на риск недообнаружения эффекта.',
+    impact: 'Оценивает достаточность данных для уверенного вывода.',
   },
   traffic: {
-    title: 'Traffic split',
-    description: 'Фактическое распределение трафика по вариантам.',
+    title: 'Распределение трафика',
+    description: 'Фактическое распределение пользователей между вариантами.',
     whatItShows: 'Процент трафика по каждому варианту.',
-    howToRead: 'Сильный дисбаланс может указывать на SRM.',
+    howToRead: 'Сильный дисбаланс может указывать на перекос распределения.',
     impact: 'Критично для валидности эксперимента.',
   },
 };
 
 export const ResultsChartsPage: React.FC = () => {
   const { timeSeriesData } = useOutletContext<ResultsOutletContext>();
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+
+  const c = useMemo(
+    () => ({
+      panelBg: isDark ? '#1c1917' : '#ffffff',
+      panelSoft: isDark ? '#171412' : '#f5f0e8',
+      border: isDark ? '#292524' : '#e7e5e4',
+      textPrimary: isDark ? '#fafaf9' : '#1c1917',
+      textMuted: isDark ? '#a8a29e' : '#78716c',
+      textSub: isDark ? '#57534e' : '#a8a29e',
+      accent: '#d97706',
+      accentSoft: isDark ? 'rgba(217,119,6,0.16)' : '#fef3c7',
+      accentText: isDark ? '#fcd34d' : '#92400e',
+      shadow: isDark ? '0 12px 38px rgba(0,0,0,0.38)' : '0 10px 30px rgba(28,25,23,0.08)',
+    }),
+    [isDark],
+  );
+
   const [chartType, setChartType] = useState<'cumulative' | 'mean' | 'ci' | 'pvalue' | 'uplift' | 'power' | 'traffic'>('cumulative');
   const [showChartInfo, setShowChartInfo] = useState(true);
 
@@ -107,20 +127,24 @@ export const ResultsChartsPage: React.FC = () => {
     if (!info || !showChartInfo) return null;
 
     return (
-      <Card size="small" style={{ marginBottom: 12 }}>
-        <Text strong>{info.title} — Что показывает этот график?</Text>
-        <Paragraph style={{ marginTop: 8, marginBottom: 8 }}>{info.description}</Paragraph>
-        <Row gutter={16}>
-          <Col span={8}><Text strong>📊 Что отображено:</Text><br /><Text type="secondary">{info.whatItShows}</Text></Col>
-          <Col span={8}><Text strong>🔍 Как читать:</Text><br /><Text type="secondary">{info.howToRead}</Text></Col>
-          <Col span={8}><Text strong>💼 На что влияет:</Text><br /><Text type="secondary">{info.impact}</Text></Col>
-        </Row>
-      </Card>
+      <div style={{ borderRadius: 14, border: `1px solid ${c.border}`, backgroundColor: c.panelBg, boxShadow: c.shadow, overflow: 'hidden', marginBottom: 12 }}>
+        <div style={{ padding: '12px 14px', borderBottom: `1px solid ${c.border}`, backgroundColor: c.panelSoft, fontSize: 14, fontWeight: 700, color: c.textPrimary }}>
+          {info.title} — пояснение графика
+        </div>
+        <div style={{ padding: 14 }}>
+          <Paragraph style={{ marginTop: 0, marginBottom: 8 }}>{info.description}</Paragraph>
+          <Row gutter={16}>
+            <Col span={8}><Text strong>Что отображено:</Text><br /><Text type="secondary">{info.whatItShows}</Text></Col>
+            <Col span={8}><Text strong>Как читать:</Text><br /><Text type="secondary">{info.howToRead}</Text></Col>
+            <Col span={8}><Text strong>Практический смысл:</Text><br /><Text type="secondary">{info.impact}</Text></Col>
+          </Row>
+        </div>
+      </div>
     );
   };
 
   const renderCumulativeChart = () => (
-    <Card title="📈 Накопленная метрика по вариантам" size="small" style={{ marginBottom: 16 }}>
+    <Card title="Накопленная метрика по вариантам" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
       <ResponsiveContainer width="100%" height={380}>
         <AreaChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" />
@@ -145,7 +169,7 @@ export const ResultsChartsPage: React.FC = () => {
   );
 
   const renderMeanMetricChart = () => (
-    <Card title="📊 Средняя метрика на пользователя" size="small" style={{ marginBottom: 16 }}>
+    <Card title="Среднее значение метрики на пользователя" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
       <ResponsiveContainer width="100%" height={380}>
         <LineChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" />
@@ -170,7 +194,7 @@ export const ResultsChartsPage: React.FC = () => {
   );
 
   const renderConfidenceIntervalsChart = () => (
-    <Card title="🎯 Доверительные интервалы (95%)" size="small" style={{ marginBottom: 16 }}>
+    <Card title="Доверительные интервалы (95%)" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
       <ResponsiveContainer width="100%" height={380}>
         <LineChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" />
@@ -183,7 +207,7 @@ export const ResultsChartsPage: React.FC = () => {
               <Line
                 type="monotone"
                 dataKey={(data: any) => data[variant]?.confidence_interval_lower ?? null}
-                name={`${variant} — нижняя граница ДИ`}
+                name={`${variant} — нижняя граница`}
                 stroke={getVariantColor(variant)}
                 strokeDasharray="4 4"
                 dot={false}
@@ -192,7 +216,7 @@ export const ResultsChartsPage: React.FC = () => {
               <Line
                 type="monotone"
                 dataKey={(data: any) => data[variant]?.confidence_interval_upper ?? null}
-                name={`${variant} — верхняя граница ДИ`}
+                name={`${variant} — верхняя граница`}
                 stroke={getVariantColor(variant)}
                 strokeDasharray="4 4"
                 dot={false}
@@ -217,7 +241,7 @@ export const ResultsChartsPage: React.FC = () => {
     });
 
     return (
-      <Card title="📉 p-значение (сырое, мониторинг)" size="small" style={{ marginBottom: 16 }}>
+      <Card title="Сырое p-значение (мониторинг)" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
         <ResponsiveContainer width="100%" height={380}>
           <LineChart data={pValueData}>
             <CartesianGrid strokeDasharray="3 3" />
@@ -233,7 +257,7 @@ export const ResultsChartsPage: React.FC = () => {
                   key={variant}
                   type="monotone"
                   dataKey={variant}
-                  name={`Вариант ${variant} vs ${timeSeriesData.variants[0]}`}
+                  name={`Вариант ${variant} относительно ${timeSeriesData.variants[0]}`}
                   stroke={getVariantColor(variant)}
                   strokeWidth={2}
                   dot={false}
@@ -247,14 +271,14 @@ export const ResultsChartsPage: React.FC = () => {
   };
 
   const renderUpliftChart = () => (
-    <Card title="🚀 Прирост относительно контроля (%)" size="small" style={{ marginBottom: 16 }}>
+    <Card title="Прирост относительно контроля (%)" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
       <ResponsiveContainer width="100%" height={380}>
         <LineChart data={timeSeriesData?.uplift_over_time || []}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="users_processed" />
           <YAxis />
           <Tooltip />
-          <Legend formatter={(value) => `Вариант ${value} (uplift)`} />
+          <Legend formatter={(value) => `Вариант ${value} (прирост)`} />
           {(timeSeriesData?.variants || [])
             .filter((v) => v !== timeSeriesData?.variants?.[0])
             .map((variant) => (
@@ -274,14 +298,14 @@ export const ResultsChartsPage: React.FC = () => {
   );
 
   const renderPowerChart = () => (
-    <Card title="⚡ Статистическая мощность" size="small" style={{ marginBottom: 16 }}>
+    <Card title="Статистическая мощность" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
       <ResponsiveContainer width="100%" height={380}>
         <LineChart data={timeSeriesData?.power_over_time || []}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="users_processed" />
           <YAxis domain={[0, 1]} />
           <Tooltip />
-          <Legend formatter={(value) => `Вариант ${value} — power`} />
+          <Legend formatter={(value) => `Вариант ${value} — мощность`} />
           {(timeSeriesData?.variants || [])
             .filter((v) => v !== timeSeriesData?.variants?.[0])
             .map((variant) => (
@@ -307,7 +331,7 @@ export const ResultsChartsPage: React.FC = () => {
     }));
 
     return (
-      <Card title="🛣️ Распределение трафика" size="small" style={{ marginBottom: 16 }}>
+      <Card title="Распределение трафика" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
         <ResponsiveContainer width="100%" height={320}>
           <BarChart data={trafficData}>
             <CartesianGrid strokeDasharray="3 3" />
@@ -324,33 +348,52 @@ export const ResultsChartsPage: React.FC = () => {
 
   return (
     <>
-      <Card style={{ marginBottom: 16 }}>
-        <Row gutter={[16, 16]} align="middle" wrap>
-          <Col>
-            <Text strong>Тип графика:</Text>
-          </Col>
-          <Col flex="auto">
-            <Select value={chartType} onChange={setChartType} style={{ width: 320 }}>
-              <Option value="cumulative">📈 Накопленная метрика</Option>
-              <Option value="mean">📊 Средняя метрика</Option>
-              <Option value="ci">🎯 Доверительные интервалы (ДИ)</Option>
-              <Option value="pvalue">📉 p-значение (сырое)</Option>
-              <Option value="uplift">🚀 Прирост относительно контроля</Option>
-              <Option value="power">⚡ Статистическая мощность</Option>
-              <Option value="traffic">🛣️ Распределение трафика</Option>
-            </Select>
-          </Col>
-          <Col>
-            <Tag
-              color={showChartInfo ? 'blue' : 'default'}
-              style={{ cursor: 'pointer' }}
-              onClick={() => setShowChartInfo(!showChartInfo)}
-            >
-              <InfoCircleOutlined /> {showChartInfo ? 'Скрыть описание' : 'Показать описание'}
-            </Tag>
-          </Col>
-        </Row>
-      </Card>
+      <div
+        style={{
+          marginBottom: 16,
+          borderRadius: 14,
+          border: `1px solid ${isDark ? 'rgba(217,119,6,0.32)' : '#fcd38d'}`,
+          background: isDark ? 'linear-gradient(135deg, rgba(217,119,6,0.18), rgba(59,130,246,0.08))' : 'linear-gradient(135deg, #fff7e6, #fff)',
+          boxShadow: c.shadow,
+          padding: 16,
+        }}
+      >
+        <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.35px', color: c.textSub, marginBottom: 6 }}>Аналитика динамики</div>
+        <div style={{ fontSize: 17, fontWeight: 800, color: c.textPrimary }}>Подробный просмотр поведения метрик на всём пути эксперимента</div>
+      </div>
+
+      <div style={{ borderRadius: 14, border: `1px solid ${c.border}`, backgroundColor: c.panelBg, boxShadow: c.shadow, overflow: 'hidden', marginBottom: 14 }}>
+        <div style={{ padding: '12px 14px', borderBottom: `1px solid ${c.border}`, backgroundColor: c.panelSoft, fontSize: 14, fontWeight: 700, color: c.textPrimary }}>
+          Настройки графиков
+        </div>
+        <div style={{ padding: 14 }}>
+          <Row gutter={[16, 16]} align="middle" wrap>
+            <Col>
+              <Text strong>Тип графика:</Text>
+            </Col>
+            <Col flex="auto">
+              <Select value={chartType} onChange={setChartType} style={{ width: 360 }}>
+                <Option value="cumulative">Накопленная метрика</Option>
+                <Option value="mean">Среднее значение метрики</Option>
+                <Option value="ci">Доверительные интервалы (ДИ)</Option>
+                <Option value="pvalue">Сырое p-значение</Option>
+                <Option value="uplift">Прирост относительно контроля</Option>
+                <Option value="power">Статистическая мощность</Option>
+                <Option value="traffic">Распределение трафика</Option>
+              </Select>
+            </Col>
+            <Col>
+              <Tag
+                color={showChartInfo ? 'blue' : 'default'}
+                style={{ cursor: 'pointer' }}
+                onClick={() => setShowChartInfo(!showChartInfo)}
+              >
+                <InfoCircleOutlined /> {showChartInfo ? 'Скрыть пояснение' : 'Показать пояснение'}
+              </Tag>
+            </Col>
+          </Row>
+        </div>
+      </div>
 
       {renderChartDescription(chartType)}
       {chartType === 'cumulative' && renderCumulativeChart()}

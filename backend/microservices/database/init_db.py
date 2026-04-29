@@ -37,23 +37,65 @@ def create_tables() -> None:
 
 def seed_default_users() -> None:
     with Session(engine) as db:
+        # Миграция legacy тест-аккаунтов:
+        # analyst -> gubanovaaa, manager -> Ivanovii, удаление старого developer.
+        analyst_user = db.query(UserORM).filter(UserORM.username == "analyst").first()
+        if analyst_user and not db.query(UserORM).filter(UserORM.username == "gubanovaaa").first():
+            analyst_user.username = "gubanovaaa"
+
+        manager_user = db.query(UserORM).filter(UserORM.username == "manager").first()
+        if manager_user and not db.query(UserORM).filter(UserORM.username == "Ivanovii").first():
+            manager_user.username = "Ivanovii"
+
+        legacy_developer_user = db.query(UserORM).filter(UserORM.username == "developer").first()
+        if legacy_developer_user:
+            db.delete(legacy_developer_user)
+
         defaults = [
             {
-                "username": "developer",
-                "role": "developer",
+                "username": "timohinds",
+                "role": "user",
                 "full_name": "Разработчик",
+                "job_title": "developer",
+                "permissions": [
+                    "Администрирование",
+                    "GAN_менеджер_обучение",
+                    "GAN_менеджер_генерация_данных",
+                    "GAN_менеджер_редактирование",
+                    "AB_тесты_создание",
+                    "AB_тесты_управление",
+                    "AB_тесты_удаление_и_архивация",
+                    "Шаблоны_просмотр",
+                    "Шаблоны_редактирование",
+                    "Шаблоны_удаление",
+                    "Просмотр_результатов_тестов",
+                    "Экспорт_результатов",
+                ],
                 "password": "dev123",
             },
             {
-                "username": "analyst",
-                "role": "analyst",
+                "username": "gubanovaaa",
+                "role": "user",
                 "full_name": "Аналитик",
+                "job_title": "analyst",
+                "permissions": [
+                    "GAN_менеджер_генерация_данных",
+                    "AB_тесты_создание",
+                    "Просмотр_результатов_тестов",
+                    "Шаблоны_просмотр",
+                ],
                 "password": "analyst123",
             },
             {
-                "username": "manager",
-                "role": "manager",
+                "username": "Ivanovii",
+                "role": "user",
                 "full_name": "Проект-менеджер",
+                "job_title": "project_manager",
+                "permissions": [
+                    "Просмотр_результатов_тестов",
+                    "Экспорт_результатов",
+                    "GAN_менеджер_обучение",
+                ],
                 "password": "manager123",
             },
         ]
@@ -61,12 +103,20 @@ def seed_default_users() -> None:
         for item in defaults:
             existing = db.query(UserORM).filter(UserORM.username == item["username"]).first()
             if existing:
+                # Для уже существующих пользователей НЕ перетираем персональные поля
+                # (full_name и др.), иначе после рестарта Docker профиль «сбрасывается».
+                # Поддерживаем только базовую совместимость роли и прав.
+                existing.role = item["role"]
+                existing.permissions_json = item.get("permissions", [])
                 continue
+
             db.add(
                 UserORM(
                     username=item["username"],
                     role=item["role"],
                     full_name=item["full_name"],
+                    job_title=item.get("job_title"),
+                    permissions_json=item.get("permissions", []),
                     hashed_password=get_password_hash(item["password"]),
                 )
             )

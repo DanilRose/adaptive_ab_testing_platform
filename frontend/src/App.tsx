@@ -9,7 +9,9 @@ import { ResultsOverviewPage } from './components/Results/ResultsOverviewPage';
 import { ResultsChartsPage } from './components/Results/ResultsChartsPage';
 import { LoginPage } from './components/Auth/LoginPage';
 import { ProtectedRoute } from './components/Auth/ProtectedRoute';
+import { AdminPage } from './components/Admin/AdminPage';
 import { useAuth } from './context/AuthContext';
+import { ProfilePage } from './components/Profile/ProfilePage';
 
 const ForbiddenPage: React.FC = () => (
   <div className="flex min-h-screen items-center justify-center bg-background">
@@ -25,6 +27,48 @@ const ForbiddenPage: React.FC = () => (
 const AppRoutes: React.FC = () => {
   const { isAuthenticated, user } = useAuth();
 
+  const getHomeRoute = (): string => {
+    if (!isAuthenticated || !user) return '/login';
+
+    const permissions = user.permissions || [];
+
+    if (
+      permissions.includes('Просмотр_результатов_тестов') ||
+      permissions.includes('Экспорт_результатов')
+    ) {
+      return '/results';
+    }
+
+    if (
+      permissions.includes('AB_тесты_создание') ||
+      permissions.includes('AB_тесты_управление')
+    ) {
+      return '/ab-manager';
+    }
+
+    if (
+      permissions.includes('GAN_менеджер_обучение') ||
+      permissions.includes('GAN_менеджер_генерация_данных')
+    ) {
+      return '/gan-manager';
+    }
+
+    if (
+      permissions.includes('Шаблоны_просмотр') ||
+      permissions.includes('Шаблоны_создание') ||
+      permissions.includes('Шаблоны_редактирование') ||
+      permissions.includes('Шаблоны_удаление')
+    ) {
+      return '/templates';
+    }
+
+    if (permissions.includes('Администрирование')) {
+      return '/admin';
+    }
+
+    return '/profile';
+  };
+
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
@@ -32,13 +76,13 @@ const AppRoutes: React.FC = () => {
 
       <Route
         path="/"
-        element={<Navigate to="/ab-manager" replace />}
+        element={<Navigate to={getHomeRoute()} replace />}
       />
 
       <Route
         path="/ab-manager"
         element={
-          <ProtectedRoute allowedRoles={['developer', 'analyst']}>
+          <ProtectedRoute allowedPermissions={['AB_тесты_создание', 'AB_тесты_управление']}>
             <AppLayout>
               <ABManager />
             </AppLayout>
@@ -49,7 +93,7 @@ const AppRoutes: React.FC = () => {
       <Route
         path="/gan-manager"
         element={
-          <ProtectedRoute allowedRoles={['developer', 'analyst']}>
+          <ProtectedRoute allowedPermissions={['GAN_менеджер_обучение', 'GAN_менеджер_генерация_данных']}>
             <AppLayout>
               <GANManager />
             </AppLayout>
@@ -60,7 +104,7 @@ const AppRoutes: React.FC = () => {
       <Route
         path="/results"
         element={
-          <ProtectedRoute allowedRoles={['developer', 'manager']}>
+          <ProtectedRoute allowedPermissions={['Просмотр_результатов_тестов', 'Экспорт_результатов']}>
             <AppLayout>
               <ResultsSectionPage />
             </AppLayout>
@@ -75,9 +119,31 @@ const AppRoutes: React.FC = () => {
       <Route
         path="/templates"
         element={
-          <ProtectedRoute allowedRoles={['developer', 'analyst']}>
+          <ProtectedRoute allowedPermissions={['Шаблоны_просмотр', 'Шаблоны_создание', 'Шаблоны_редактирование', 'Шаблоны_удаление']}>
             <AppLayout>
               <TemplatesPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute allowedPermissions={['Администрирование']}>
+            <AppLayout>
+              <AdminPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <ProfilePage />
             </AppLayout>
           </ProtectedRoute>
         }

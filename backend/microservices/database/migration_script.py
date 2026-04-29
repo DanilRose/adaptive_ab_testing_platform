@@ -126,6 +126,20 @@ def migrate_ab_tests_table():
         """
         CREATE INDEX IF NOT EXISTS ix_metric_events_test_id ON metric_events(test_id);
         """,
+        """
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS role VARCHAR(32) DEFAULT 'user',
+        ADD COLUMN IF NOT EXISTS job_title VARCHAR(64),
+        ADD COLUMN IF NOT EXISTS permissions_json JSONB,
+        ADD COLUMN IF NOT EXISTS email VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS phone VARCHAR(32),
+        ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(2048),
+        ADD COLUMN IF NOT EXISTS avatar_blob BYTEA,
+        ADD COLUMN IF NOT EXISTS avatar_mime_type VARCHAR(128);
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email_unique ON users(email) WHERE email IS NOT NULL;
+        """,
     ]
 
     with engine.connect() as conn:

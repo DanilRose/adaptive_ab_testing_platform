@@ -8,10 +8,11 @@ import {
   BrainCircuit,
   Cpu,
   FlaskConical,
+  Shield,
   type LucideProps,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import type { UserRole } from '@/types';
+import type { PermissionKey, UserRole } from '@/types';
 import { useTheme } from '@/context/ThemeContext';
 
 type LucideIcon = React.ForwardRefExoticComponent<Omit<LucideProps, 'ref'> & React.RefAttributes<SVGSVGElement>>;
@@ -21,18 +22,19 @@ interface MenuRouteItem {
   path: string;
   label: string;
   icon: LucideIcon;
-  allowedRoles: UserRole[];
+  allowedPermissions: PermissionKey[];
 }
 
 const menuRoutes: MenuRouteItem[] = [
-  { key: '/ab-manager', path: '/ab-manager', label: 'A/B Менеджер', icon: FlaskConical, allowedRoles: ['developer', 'analyst'] },
-  { key: '/gan-manager', path: '/gan-manager', label: 'GAN Менеджер', icon: Cpu, allowedRoles: ['developer', 'analyst'] },
-  { key: '/results', path: '/results', label: 'Результаты', icon: BarChart3, allowedRoles: ['developer', 'manager'] },
-  { key: '/templates', path: '/templates', label: 'Шаблоны', icon: FileText, allowedRoles: ['developer', 'analyst'] },
+  { key: '/ab-manager', path: '/ab-manager', label: 'A/B Менеджер', icon: FlaskConical, allowedPermissions: ['AB_тесты_создание', 'AB_тесты_управление'] },
+  { key: '/gan-manager', path: '/gan-manager', label: 'GAN Менеджер', icon: Cpu, allowedPermissions: ['GAN_менеджер_обучение', 'GAN_менеджер_генерация_данных'] },
+  { key: '/results', path: '/results', label: 'Результаты', icon: BarChart3, allowedPermissions: ['Просмотр_результатов_тестов', 'Экспорт_результатов'] },
+  { key: '/templates', path: '/templates', label: 'Шаблоны', icon: FileText, allowedPermissions: ['Шаблоны_просмотр'] },
+  { key: '/admin', path: '/admin', label: 'Администрирование', icon: Shield, allowedPermissions: ['Администрирование'] },
 ];
 
 interface SidebarProps {
-  user: { role: UserRole } | null;
+  user: { role: UserRole; permissions?: PermissionKey[] } | null;
   collapsed: boolean;
   onToggle: () => void;
 }
@@ -45,7 +47,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed, onToggle }) =
 
   const visibleMenuItems = useMemo(() => {
     if (!user) return [];
-    return menuRoutes.filter((item) => item.allowedRoles.includes(user.role));
+    const userPermissions = user.permissions || [];
+    return menuRoutes.filter((item) => item.allowedPermissions.some((p) => userPermissions.includes(p)));
   }, [user]);
 
   const selectedKey = useMemo(() => {

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { templatesAPI } from '../../utils/api';
 import { useTheme } from '@/context/ThemeContext';
+import { useAuth } from '@/context/AuthContext';
 
 /* ────────────────────── types ────────────────────── */
 
@@ -96,6 +97,7 @@ const Toast: React.FC<ToastProps> = ({ message, kind, onClose }) => (
 
 export const TemplatesPage: React.FC = () => {
   const { theme } = useTheme();
+  const { user } = useAuth();
   const isDark = theme === 'dark';
 
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -122,6 +124,12 @@ export const TemplatesPage: React.FC = () => {
   /* hovering rows */
   const [hoveredRow, setHoveredRow] = useState<number | null>(null);
   const [hoveredBtn, setHoveredBtn] = useState<string | null>(null);
+
+  const permissions = user?.permissions || [];
+  const canViewTemplates = permissions.includes('Шаблоны_просмотр');
+  const canCreateTemplates = permissions.includes('Шаблоны_создание');
+  const canEditTemplates = permissions.includes('Шаблоны_редактирование');
+  const canDeleteTemplates = permissions.includes('Шаблоны_удаление');
 
   /* ── colours (same warm palette as Sidebar / LoginPage) ── */
   const c = useMemo(() => ({
@@ -382,14 +390,16 @@ export const TemplatesPage: React.FC = () => {
             label="Обновить"
             variant="secondary"
           />
-          <ActionButton
-            onClick={() => { setCreateOpen(true); setForm({ ...emptyForm }); setFormErrors({}); }}
-            isDark={isDark}
-            c={c}
-            icon={<Plus size={14} />}
-            label="Создать шаблон"
-            variant="primary"
-          />
+          {canCreateTemplates && (
+            <ActionButton
+              onClick={() => { setCreateOpen(true); setForm({ ...emptyForm }); setFormErrors({}); }}
+              isDark={isDark}
+              c={c}
+              icon={<Plus size={14} />}
+              label="Создать шаблон"
+              variant="primary"
+            />
+          )}
         </div>
       </div>
 
@@ -515,14 +525,16 @@ export const TemplatesPage: React.FC = () => {
           <div style={{ padding: '64px 24px', textAlign: 'center' }}>
             <FileText size={36} color={c.textSub} style={{ marginBottom: 12 }} />
             <p style={{ margin: '0 0 16px', color: c.textMuted, fontSize: 15 }}>Шаблоны не найдены</p>
-            <ActionButton
-              onClick={() => { setCreateOpen(true); setForm({ ...emptyForm }); setFormErrors({}); }}
-              isDark={isDark}
-              c={c}
-              icon={<Plus size={14} />}
-              label="Создать первый шаблон"
-              variant="primary"
-            />
+            {canCreateTemplates && (
+              <ActionButton
+                onClick={() => { setCreateOpen(true); setForm({ ...emptyForm }); setFormErrors({}); }}
+                isDark={isDark}
+                c={c}
+                icon={<Plus size={14} />}
+                label="Создать первый шаблон"
+                variant="primary"
+              />
+            )}
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
@@ -620,9 +632,11 @@ export const TemplatesPage: React.FC = () => {
                       <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
                         <div style={{ display: 'flex', gap: 4 }}>
                           {[
-                            { id: `view-${tpl.id}`, icon: <Eye size={14} />, title: 'Просмотреть', onClick: () => setViewTarget(tpl) },
-                            { id: `edit-${tpl.id}`, icon: <Edit2 size={14} />, title: 'Редактировать', onClick: () => openEdit(tpl) },
-                            { id: `dup-${tpl.id}`, icon: <Copy size={14} />, title: 'Дублировать', onClick: () => handleDuplicate(tpl) },
+                            ...(canViewTemplates ? [{ id: `view-${tpl.id}`, icon: <Eye size={14} />, title: 'Просмотреть', onClick: () => setViewTarget(tpl) }] : []),
+                            ...(canEditTemplates ? [
+                              { id: `edit-${tpl.id}`, icon: <Edit2 size={14} />, title: 'Редактировать', onClick: () => openEdit(tpl) },
+                              { id: `dup-${tpl.id}`, icon: <Copy size={14} />, title: 'Дублировать', onClick: () => handleDuplicate(tpl) },
+                            ] : []),
                           ].map(btn => (
                             <button
                               key={btn.id}
@@ -644,24 +658,26 @@ export const TemplatesPage: React.FC = () => {
                               {btn.icon}
                             </button>
                           ))}
-                          <button
-                            title="Удалить"
-                            onClick={() => setDeleteTarget(tpl)}
-                            onMouseEnter={() => setHoveredBtn(`del-${tpl.id}`)}
-                            onMouseLeave={() => setHoveredBtn(null)}
-                            style={{
-                              width: 30, height: 30,
-                              borderRadius: 7,
-                              border: `1px solid ${hoveredBtn === `del-${tpl.id}` ? c.dangerBorder : 'transparent'}`,
-                              backgroundColor: hoveredBtn === `del-${tpl.id}` ? c.dangerSoft : 'transparent',
-                              color: hoveredBtn === `del-${tpl.id}` ? c.danger : c.textMuted,
-                              cursor: 'pointer',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              transition: 'all 0.12s',
-                            }}
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {canDeleteTemplates && (
+                            <button
+                              title="Удалить"
+                              onClick={() => setDeleteTarget(tpl)}
+                              onMouseEnter={() => setHoveredBtn(`del-${tpl.id}`)}
+                              onMouseLeave={() => setHoveredBtn(null)}
+                              style={{
+                                width: 30, height: 30,
+                                borderRadius: 7,
+                                border: `1px solid ${hoveredBtn === `del-${tpl.id}` ? c.dangerBorder : 'transparent'}`,
+                                backgroundColor: hoveredBtn === `del-${tpl.id}` ? c.dangerSoft : 'transparent',
+                                color: hoveredBtn === `del-${tpl.id}` ? c.danger : c.textMuted,
+                                cursor: 'pointer',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                transition: 'all 0.12s',
+                              }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -820,22 +836,26 @@ export const TemplatesPage: React.FC = () => {
               justifyContent: 'flex-end',
               gap: 8,
             }}>
-              <ActionButton
-                onClick={() => { setViewTarget(null); if (viewTarget) handleDuplicate(viewTarget); }}
-                isDark={isDark}
-                c={c}
-                icon={<Copy size={14} />}
-                label="Дублировать"
-                variant="secondary"
-              />
-              <ActionButton
-                onClick={() => { setViewTarget(null); if (viewTarget) openEdit(viewTarget); }}
-                isDark={isDark}
-                c={c}
-                icon={<Edit2 size={14} />}
-                label="Редактировать"
-                variant="primary"
-              />
+              {canEditTemplates && (
+                <ActionButton
+                  onClick={() => { setViewTarget(null); if (viewTarget) handleDuplicate(viewTarget); }}
+                  isDark={isDark}
+                  c={c}
+                  icon={<Copy size={14} />}
+                  label="Дублировать"
+                  variant="secondary"
+                />
+              )}
+              {canEditTemplates && (
+                <ActionButton
+                  onClick={() => { setViewTarget(null); if (viewTarget) openEdit(viewTarget); }}
+                  isDark={isDark}
+                  c={c}
+                  icon={<Edit2 size={14} />}
+                  label="Редактировать"
+                  variant="primary"
+                />
+              )}
               <ActionButton
                 onClick={() => setViewTarget(null)}
                 isDark={isDark}

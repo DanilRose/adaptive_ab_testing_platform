@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { abTestAPI, dataAPI, templatesAPI } from '../../utils/api';
 import { useTheme } from '@/context/ThemeContext';
+import { useAuth } from '@/context/AuthContext';
 
 /* ────────────────────── types ────────────────────── */
 
@@ -103,6 +104,7 @@ const Toast: React.FC<ToastProps> = ({ message, kind, onClose }) => (
 
 export const ABManager: React.FC = () => {
   const { theme } = useTheme();
+  const { user } = useAuth();
   const isDark = theme === 'dark';
 
   // State
@@ -163,6 +165,20 @@ export const ABManager: React.FC = () => {
     tabActive:   isDark ? '#292524' : '#fef3c7',
     tabHover:    isDark ? '#211f1d' : '#f5f0e8',
   }), [isDark]);
+
+  const userPermissions = user?.permissions || [];
+  const canCreateAB = userPermissions.includes('AB_тесты_создание');
+  const canManageAB = userPermissions.includes('AB_тесты_управление');
+  const canArchiveDeleteAB = userPermissions.includes('AB_тесты_удаление_и_архивация');
+
+  useEffect(() => {
+    if (activeTab === 'create' && !canCreateAB && canManageAB) {
+      setActiveTab('dashboard');
+    }
+    if (activeTab === 'dashboard' && !canManageAB && canCreateAB) {
+      setActiveTab('create');
+    }
+  }, [activeTab, canCreateAB, canManageAB]);
 
   const statusColors = useMemo(() => ({
     prepared: { bg: isDark ? 'rgba(59,130,246,0.14)' : '#eff6ff', text: isDark ? '#93c5fd' : '#1e40af', border: '#3b82f6' },
@@ -549,17 +565,19 @@ export const ABManager: React.FC = () => {
                   c={c}
                   isDark={isDark}
                 />
-                <ActionButton
-                  onClick={() => handleArchiveTest(test.test_id)}
-                  icon={<Folder size={14} />}
-                  label="В архив"
-                  variant="secondary"
-                  c={c}
-                  isDark={isDark}
-                />
+                {canArchiveDeleteAB && (
+                  <ActionButton
+                    onClick={() => handleArchiveTest(test.test_id)}
+                    icon={<Folder size={14} />}
+                    label="В архив"
+                    variant="secondary"
+                    c={c}
+                    isDark={isDark}
+                  />
+                )}
               </>
             )}
-            {test.status === 'active' && (
+            {test.status === 'active' && canManageAB && (
               <ActionButton
                 onClick={() => handlePauseTest(test.test_id)}
                 icon={<PauseCircle size={14} />}
@@ -569,7 +587,7 @@ export const ABManager: React.FC = () => {
                 isDark={isDark}
               />
             )}
-            {test.status === 'paused' && (
+            {test.status === 'paused' && canManageAB && (
               <ActionButton
                 onClick={() => handleResumeTest(test.test_id)}
                 icon={<PlayCircle size={14} />}
@@ -579,7 +597,7 @@ export const ABManager: React.FC = () => {
                 isDark={isDark}
               />
             )}
-            {test.status === 'completed' && (
+            {test.status === 'completed' && canArchiveDeleteAB && (
               <ActionButton
                 onClick={() => handleArchiveTest(test.test_id)}
                 icon={<Folder size={14} />}
@@ -589,7 +607,7 @@ export const ABManager: React.FC = () => {
                 isDark={isDark}
               />
             )}
-            {test.status === 'archived' && (
+            {test.status === 'archived' && canArchiveDeleteAB && (
               <ActionButton
                 onClick={() => handlePermanentlyDeleteTest(test.test_id)}
                 icon={<Trash2 size={14} />}
@@ -657,12 +675,16 @@ export const ABManager: React.FC = () => {
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
-        <PillTab active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} label="Дашборд тестов" c={c} />
-        <PillTab active={activeTab === 'create'} onClick={() => setActiveTab('create')} label="Создать A/B тест" c={c} />
+        {canManageAB && (
+          <PillTab active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} label="Дашборд тестов" c={c} />
+        )}
+        {canCreateAB && (
+          <PillTab active={activeTab === 'create'} onClick={() => setActiveTab('create')} label="Создать A/B тест" c={c} />
+        )}
       </div>
 
       {/* Tab content */}
-      {activeTab === 'dashboard' && (
+      {activeTab === 'dashboard' && canManageAB && (
         <div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 12 }}>
             {renderStatCard('Подготовленные', testsData?.counts.prepared || 0, statTones.prepared)}
@@ -760,7 +782,7 @@ export const ABManager: React.FC = () => {
         </div>
       )}
 
-      {activeTab === 'create' && (
+      {activeTab === 'create' && canCreateAB && (
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 280px', gap: 14, alignItems: 'start' }}>
           <div style={{
             borderRadius: 14,
@@ -898,8 +920,7 @@ export const ABManager: React.FC = () => {
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: c.textMuted, lineHeight: 1.6 }}>
                 <li>Первый вариант (A) используйте как контрольный</li>
                 <li>Для валидных выводов выбирайте <strong>fixed_experiment</strong></li>
-                <li>Перед созданием теста проверьте наличие GAN-датасета</li>
-                <li>MDE 0.05 = детектирование эффекта от 5%</li>
+                <li>Перед созданием теста проверьте наличие <strong>верного</strong> GAN-датасета</li>
               </ul>
             </div>
           </div>

@@ -2,14 +2,15 @@ import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
-import type { UserRole } from '@/types';
+import type { PermissionKey, UserRole } from '@/types';
 
 interface ProtectedRouteProps {
   children: JSX.Element;
   allowedRoles?: UserRole[];
+  allowedPermissions?: PermissionKey[];
 }
 
-export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowedRoles }) => {
+export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowedRoles, allowedPermissions }) => {
   const { loading, isAuthenticated, user } = useAuth();
 
   if (loading) {
@@ -29,6 +30,14 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, allowe
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {
     return <Navigate to="/forbidden" replace />;
+  }
+
+  if (allowedPermissions && allowedPermissions.length > 0) {
+    const userPermissions = user.permissions || [];
+    const hasPermission = allowedPermissions.some((p) => userPermissions.includes(p));
+    if (!hasPermission) {
+      return <Navigate to="/forbidden" replace />;
+    }
   }
 
   return children;

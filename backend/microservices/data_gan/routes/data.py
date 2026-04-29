@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from backend.microservices.ab_testing.service import ABPlatformProvider
 from backend.microservices.auth_core.models import User
-from backend.microservices.auth_core.service import require_role
+from backend.microservices.auth_core.service import get_current_user, require_role
 from backend.microservices.database import crud
 from backend.microservices.database.session import get_db
 from backend.microservices.ab_testing import ABTestLifecycleService
@@ -145,7 +145,7 @@ async def train_gan_model(
 
 
 @router.get("/gan-status", summary="Статус GAN модели")
-async def get_gan_status(current_user: User = Depends(require_role("developer", "analyst"))):
+async def get_gan_status(current_user: User = Depends(get_current_user)):
     try:
         # Проверяем кэш
         cached = _status_cache.get("gan_status")
@@ -205,7 +205,7 @@ async def generate_synthetic_data(
 
 
 @router.get("/dataset-stats", summary="Статистика datasets")
-async def get_dataset_stats(current_user: User = Depends(require_role("developer", "analyst"))):
+async def get_dataset_stats(current_user: User = Depends(get_current_user)):
     try:
         # Проверяем кэш
         cached = _status_cache.get("dataset_stats")
@@ -228,7 +228,7 @@ async def get_generated_history(
     limit: int = Query(50, ge=1, le=200, description="Максимум записей"),
     offset: int = Query(0, ge=0, description="Смещение"),
     data_type: Optional[str] = Query(None, description="Фильтр по типу данных (real|synthetic)"),
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     try:
@@ -283,7 +283,7 @@ async def get_generated_history(
 
 @router.get("/gan-checkpoints", summary="Список доступных чекпоинтов")
 async def get_gan_checkpoints(
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     try:
@@ -495,7 +495,7 @@ async def run_ab_test_simulation(
 @router.get("/generated-history/{item_id}/full", summary="Получить полный датасет")
 async def get_full_dataset(
     item_id: int,
-    current_user: User = Depends(require_role("developer", "analyst")),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     try:

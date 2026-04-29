@@ -10,6 +10,7 @@ import type {
   AuthTokenResponse,
   AuthUser,
   LoginCredentials,
+  PermissionKey,
   UserRole,
 } from '../types';
 import { authAPI } from '../utils/api';
@@ -21,6 +22,8 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   login: (credentials: LoginCredentials) => Promise<void>;
   logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
+  updateProfile: (payload: { full_name: string; email?: string | null; phone?: string | null; avatar_url?: string | null }) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -37,6 +40,11 @@ interface MeResponse {
   username: string;
   role: UserRole;
   full_name: string;
+  job_title?: 'developer' | 'analyst' | 'project_manager' | 'other';
+  permissions?: PermissionKey[];
+  email?: string | null;
+  phone?: string | null;
+  avatar_url?: string | null;
 }
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -69,6 +77,54 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       username: meData.username,
       role: meData.role,
       full_name: meData.full_name,
+      job_title: meData.job_title,
+      permissions: meData.permissions || [],
+    };
+
+    localStorage.setItem('user_role', currentUser.role);
+    localStorage.setItem('user_full_name', currentUser.full_name);
+    localStorage.setItem('username', currentUser.username);
+
+    setUser(currentUser);
+  }, []);
+
+  const refreshUser = useCallback(async () => {
+    const meResponse = await authAPI.me();
+    const meData = meResponse.data as MeResponse;
+
+    const restoredUser: AuthUser = {
+      id: meData.id,
+      username: meData.username,
+      role: meData.role,
+      full_name: meData.full_name,
+      job_title: meData.job_title,
+      permissions: meData.permissions || [],
+      email: meData.email,
+      phone: meData.phone,
+      avatar_url: meData.avatar_url,
+    };
+
+    localStorage.setItem('user_role', restoredUser.role);
+    localStorage.setItem('user_full_name', restoredUser.full_name);
+    localStorage.setItem('username', restoredUser.username);
+
+    setUser(restoredUser);
+  }, []);
+
+  const updateProfile = useCallback(async (payload: { full_name: string; email?: string | null; phone?: string | null; avatar_url?: string | null }) => {
+    const response = await authAPI.updateProfile(payload);
+    const updated = response.data as MeResponse;
+
+    const currentUser: AuthUser = {
+      id: updated.id,
+      username: updated.username,
+      role: updated.role,
+      full_name: updated.full_name,
+      job_title: updated.job_title,
+      permissions: updated.permissions || [],
+      email: updated.email,
+      phone: updated.phone,
+      avatar_url: updated.avatar_url,
     };
 
     localStorage.setItem('user_role', currentUser.role);
@@ -103,21 +159,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setToken(storedToken);
 
       try {
-        const meResponse = await authAPI.me();
-        const meData = meResponse.data as MeResponse;
-
-        const restoredUser: AuthUser = {
-          id: meData.id,
-          username: meData.username,
-          role: meData.role,
-          full_name: meData.full_name,
-        };
-
-        localStorage.setItem('user_role', restoredUser.role);
-        localStorage.setItem('user_full_name', restoredUser.full_name);
-        localStorage.setItem('username', restoredUser.username);
-
-        setUser(restoredUser);
+        await refreshUser();
       } catch {
         resetSession();
       } finally {
@@ -126,7 +168,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     void initializeAuth();
-  }, [resetSession]);
+  }, [resetSession, refreshUser]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -136,8 +178,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isAuthenticated: Boolean(token && user),
       login,
       logout,
+      refreshUser,
+      updateProfile,
     }),
-    [user, token, loading, login, logout]
+    [user, token, loading, login, logout, refreshUser, updateProfile]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
