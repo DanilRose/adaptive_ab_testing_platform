@@ -132,11 +132,11 @@ export const ResultsChartsPage: React.FC = () => {
           {info.title} — пояснение графика
         </div>
         <div style={{ padding: 14 }}>
-          <Paragraph style={{ marginTop: 0, marginBottom: 8 }}>{info.description}</Paragraph>
+          <Paragraph style={{ marginTop: 0, marginBottom: 8, color: c.textPrimary }}>{info.description}</Paragraph>
           <Row gutter={16}>
-            <Col span={8}><Text strong>Что отображено:</Text><br /><Text type="secondary">{info.whatItShows}</Text></Col>
-            <Col span={8}><Text strong>Как читать:</Text><br /><Text type="secondary">{info.howToRead}</Text></Col>
-            <Col span={8}><Text strong>Практический смысл:</Text><br /><Text type="secondary">{info.impact}</Text></Col>
+            <Col span={8}><Text strong>Что отображено:</Text><br /><Text type="secondary" style={{ color: c.textMuted }}>{info.whatItShows}</Text></Col>
+            <Col span={8}><Text strong>Как читать:</Text><br /><Text type="secondary" style={{ color: c.textMuted }}>{info.howToRead}</Text></Col>
+            <Col span={8}><Text strong>Практический смысл:</Text><br /><Text type="secondary" style={{ color: c.textMuted }}>{info.impact}</Text></Col>
           </Row>
         </div>
       </div>
@@ -144,14 +144,14 @@ export const ResultsChartsPage: React.FC = () => {
   };
 
   const renderCumulativeChart = () => (
-    <Card title="Накопленная метрика по вариантам" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
+    <Card title="Накопленная метрика по вариантам" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border, backgroundColor: c.panelBg }}>
       <ResponsiveContainer width="100%" height={380}>
         <AreaChart data={chartData}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="users_processed" />
-          <YAxis />
-          <Tooltip />
-          <Legend formatter={(value) => `Вариант ${value}`} />
+          <CartesianGrid strokeDasharray="3 3" stroke={c.border} />
+          <XAxis dataKey="users_processed" stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+          <YAxis stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+          <Tooltip contentStyle={{ backgroundColor: c.panelBg, borderColor: c.border, color: c.textPrimary }} />
+          <Legend formatter={(value) => `Вариант ${value}`} wrapperStyle={{ color: c.textPrimary }} />
           {timeSeriesData?.variants.map((variant) => (
             <Area
               key={variant}
@@ -169,14 +169,14 @@ export const ResultsChartsPage: React.FC = () => {
   );
 
   const renderMeanMetricChart = () => (
-    <Card title="Среднее значение метрики на пользователя" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
+    <Card title="Среднее значение метрики на пользователя" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border, backgroundColor: c.panelBg }}>
       <ResponsiveContainer width="100%" height={380}>
         <LineChart data={chartData}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="users_processed" />
-          <YAxis />
-          <Tooltip />
-          <Legend formatter={(value) => `Вариант ${value}`} />
+          <CartesianGrid strokeDasharray="3 3" stroke={c.border} />
+          <XAxis dataKey="users_processed" stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+          <YAxis stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+          <Tooltip contentStyle={{ backgroundColor: c.panelBg, borderColor: c.border, color: c.textPrimary }} />
+          <Legend formatter={(value) => `Вариант ${value}`} wrapperStyle={{ color: c.textPrimary }} />
           {timeSeriesData?.variants.map((variant) => (
             <Line
               key={variant}
@@ -194,14 +194,14 @@ export const ResultsChartsPage: React.FC = () => {
   );
 
   const renderConfidenceIntervalsChart = () => (
-    <Card title="Доверительные интервалы (95%)" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
+    <Card title="Доверительные интервалы (95%)" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border, backgroundColor: c.panelBg }}>
       <ResponsiveContainer width="100%" height={380}>
         <LineChart data={chartData}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="users_processed" />
-          <YAxis />
-          <Tooltip />
-          <Legend />
+          <CartesianGrid strokeDasharray="3 3" stroke={c.border} />
+          <XAxis dataKey="users_processed" stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+          <YAxis stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+          <Tooltip contentStyle={{ backgroundColor: c.panelBg, borderColor: c.border, color: c.textPrimary }} />
+          <Legend wrapperStyle={{ color: c.textPrimary }} />
           {timeSeriesData?.variants.map((variant) => (
             <React.Fragment key={variant}>
               <Line
@@ -241,14 +241,14 @@ export const ResultsChartsPage: React.FC = () => {
     });
 
     return (
-      <Card title="Сырое p-значение (мониторинг)" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
+      <Card title="Сырое p-значение (мониторинг)" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border, backgroundColor: c.panelBg }}>
         <ResponsiveContainer width="100%" height={380}>
           <LineChart data={pValueData}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="users_processed" />
-            <YAxis domain={[0, 1]} />
-            <Tooltip />
-            <Legend />
+            <CartesianGrid strokeDasharray="3 3" stroke={c.border} />
+            <XAxis dataKey="users_processed" stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+            <YAxis domain={[0, 1]} stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+            <Tooltip contentStyle={{ backgroundColor: c.panelBg, borderColor: c.border, color: c.textPrimary }} />
+            <Legend wrapperStyle={{ color: c.textPrimary }} />
             <Line dataKey="threshold" name="Порог значимости (p = 0.05)" stroke="#ff4d4f" strokeDasharray="5 5" dot={false} />
             {timeSeriesData?.variants
               .filter((v) => v !== timeSeriesData.variants[0])
@@ -271,14 +271,14 @@ export const ResultsChartsPage: React.FC = () => {
   };
 
   const renderUpliftChart = () => (
-    <Card title="Прирост относительно контроля (%)" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
+    <Card title="Прирост относительно контроля (%)" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border, backgroundColor: c.panelBg }}>
       <ResponsiveContainer width="100%" height={380}>
         <LineChart data={timeSeriesData?.uplift_over_time || []}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="users_processed" />
-          <YAxis />
-          <Tooltip />
-          <Legend formatter={(value) => `Вариант ${value} (прирост)`} />
+          <CartesianGrid strokeDasharray="3 3" stroke={c.border} />
+          <XAxis dataKey="users_processed" stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+          <YAxis stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+          <Tooltip contentStyle={{ backgroundColor: c.panelBg, borderColor: c.border, color: c.textPrimary }} />
+          <Legend formatter={(value) => `Вариант ${value} (прирост)`} wrapperStyle={{ color: c.textPrimary }} />
           {(timeSeriesData?.variants || [])
             .filter((v) => v !== timeSeriesData?.variants?.[0])
             .map((variant) => (
@@ -298,14 +298,14 @@ export const ResultsChartsPage: React.FC = () => {
   );
 
   const renderPowerChart = () => (
-    <Card title="Статистическая мощность" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
+    <Card title="Статистическая мощность" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border, backgroundColor: c.panelBg }}>
       <ResponsiveContainer width="100%" height={380}>
         <LineChart data={timeSeriesData?.power_over_time || []}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="users_processed" />
-          <YAxis domain={[0, 1]} />
-          <Tooltip />
-          <Legend formatter={(value) => `Вариант ${value} — мощность`} />
+          <CartesianGrid strokeDasharray="3 3" stroke={c.border} />
+          <XAxis dataKey="users_processed" stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+          <YAxis domain={[0, 1]} stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+          <Tooltip contentStyle={{ backgroundColor: c.panelBg, borderColor: c.border, color: c.textPrimary }} />
+          <Legend formatter={(value) => `Вариант ${value} — мощность`} wrapperStyle={{ color: c.textPrimary }} />
           {(timeSeriesData?.variants || [])
             .filter((v) => v !== timeSeriesData?.variants?.[0])
             .map((variant) => (
@@ -331,14 +331,14 @@ export const ResultsChartsPage: React.FC = () => {
     }));
 
     return (
-      <Card title="Распределение трафика" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border }}>
+      <Card title="Распределение трафика" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border, backgroundColor: c.panelBg }}>
         <ResponsiveContainer width="100%" height={320}>
           <BarChart data={trafficData}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="variant" />
-            <YAxis />
-            <Tooltip />
-            <Legend />
+            <CartesianGrid strokeDasharray="3 3" stroke={c.border} />
+            <XAxis dataKey="variant" stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+            <YAxis stroke={c.textMuted} tick={{ fill: c.textMuted }} />
+            <Tooltip contentStyle={{ backgroundColor: c.panelBg, borderColor: c.border, color: c.textPrimary }} />
+            <Legend wrapperStyle={{ color: c.textPrimary }} />
             <Bar dataKey="percent" fill="#1890ff" name="Доля трафика, %" />
           </BarChart>
         </ResponsiveContainer>

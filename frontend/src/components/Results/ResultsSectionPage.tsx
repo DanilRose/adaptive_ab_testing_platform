@@ -11,7 +11,6 @@ export interface ResultsOutletContext {
   selectedTestId: string;
   loading: boolean;
   timeSeriesData: ReturnType<typeof useResultsData>['timeSeriesData'];
-  financialImpact: ReturnType<typeof useResultsData>['financialImpact'];
   selectedTest: ReturnType<typeof useResultsData>['selectedTest'];
 }
 
@@ -26,7 +25,6 @@ export const ResultsSectionPage: React.FC = () => {
     setSelectedTestId,
     selectedTest,
     timeSeriesData,
-    financialImpact,
     loading,
     isSimulating,
   } = useResultsData();
@@ -49,9 +47,16 @@ export const ResultsSectionPage: React.FC = () => {
   );
 
   const selectedMenu = location.pathname.includes('/charts') ? 'charts' : 'overview';
+  const formatPercent = (value?: number | null) => {
+    const safeValue = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+    return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(safeValue);
+  };
 
   return (
-    <div style={{ color: c.textPrimary, fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
+    <div
+      className="results-theme"
+      style={{ color: c.textPrimary, fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}
+    >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 22, gap: 12, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div
@@ -70,8 +75,8 @@ export const ResultsSectionPage: React.FC = () => {
             <BarChart3 size={20} />
           </div>
           <div>
-            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: '-0.4px', color: c.textPrimary }}>Результаты сплит-тестов</h1>
-            <p style={{ margin: 0, fontSize: 13, color: c.textMuted }}>Сводка, валидность, рекомендации и динамика эксперимента</p>
+            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: '-0.4px', color: c.textPrimary }}>Результаты тестов</h1>
+            <p style={{ margin: 0, fontSize: 13, color: c.textMuted }}>Сводка и динамика эксперимента</p>
           </div>
         </div>
       </div>
@@ -101,10 +106,10 @@ export const ResultsSectionPage: React.FC = () => {
                 dropdownStyle={{ borderRadius: 10 }}
               >
                 {tests.map((test) => (
-                  <Option key={test.test_id} value={test.test_id}>
-                    {test.test_name} ({test.status === 'completed' ? 'завершён' : test.status === 'active' ? 'активен' : test.status}) — метрика: {test.primary_metric}
-                  </Option>
-                ))}
+                   <Option key={test.test_id} value={test.test_id}>
+                     {test.test_name} ({test.status === 'completed' ? 'завершён' : test.status === 'active' ? 'активен' : test.status}) — метрика: {test.primary_metric} — прогресс: {formatPercent(test.completion_percentage)}%
+                   </Option>
+))}
               </Select>
             </Col>
           </Row>
@@ -170,7 +175,6 @@ export const ResultsSectionPage: React.FC = () => {
             selectedTestId,
             loading,
             timeSeriesData,
-            financialImpact,
             selectedTest,
           } satisfies ResultsOutletContext}
         />

@@ -148,23 +148,6 @@ async def get_segmentation_analysis(test_id: str, segment_by: str = "user_type",
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{test_id}/financial-impact", summary="Финансовый анализ")
-async def get_financial_impact(test_id: str, arpu: float = 100.0, current_user: User = Depends(get_current_user)):
-    try:
-        db_results = platform.get_test_results(test_id)
-        results = db_results.get("results", {})
-        corrected_p = db_results.get("statistical_significance_corrected", {}) or {}
-        financial_analysis = await _calculate_financial_impact(results, corrected_p, arpu)
-
-        return {
-            "test_id": test_id,
-            "assumed_arpu": arpu,
-            "financial_analysis": financial_analysis,
-            "roi_calculation": await _calculate_roi(financial_analysis)
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/platform/performance", summary="Производительность платформы")
@@ -823,72 +806,6 @@ async def _generate_segmentation_analysis(test_id: str, segment_by: str) -> Dict
     }
 
 
-async def _calculate_financial_impact(
-    results: Dict[str, Any],
-    corrected_p_values: Dict[str, float],
-    arpu: float,
-) -> Dict[str, Any]:
-    variants = list(results.keys())
-    if not variants:
-        return {"incremental_revenue": 0.0, "best_variant": None}
-
-    control_variant = variants[0]
-    control = _to_stat_object(results[control_variant])
-    control_mean = float(control.mean)
-    control_n = int(control.sample_size)
-
-    by_variant = {}
-    best_significant_variant: Optional[str] = None
-    best_significant_incremental = 0.0
-
-    best_observed_variant: Optional[str] = None
-    best_observed_incremental = -1e18
-
-    for v in variants:
-        stat = _to_stat_object(results[v])
-        mean_val = float(stat.mean)
-        n_val = int(stat.sample_size)
-        uplift = ((mean_val - control_mean) / control_mean * 100.0) if control_mean != 0 else 0.0
-
-        # Оценка инкремента: uplift метрики * ARPU * размер когорты варианта.
-        incremental = (mean_val - control_mean) * n_val * float(arpu)
-
-        p_corr = None if v == control_variant else corrected_p_values.get(v)
-        is_significant = bool(p_corr is not None and float(p_corr) < 0.05)
-
-        by_variant[v] = {
-            "uplift_percent": float(uplift),
-            "sample_size": int(n_val),
-            "incremental_revenue": float(incremental),
-            "p_value_corrected": (None if p_corr is None else float(p_corr)),
-            "significant": is_significant,
-        }
-
-        if v != control_variant and incremental > best_observed_incremental:
-            best_observed_incremental = float(incremental)
-            best_observed_variant = v
-
-        if v != control_variant and is_significant and incremental > best_significant_incremental:
-            best_significant_incremental = float(incremental)
-            best_significant_variant = v
-
-    deployed_variant = best_significant_variant
-    deployed_incremental = best_significant_incremental if best_significant_variant else 0.0
-
-    return {
-        "control_variant": control_variant,
-        "best_variant": deployed_variant,
-        "best_observed_variant": best_observed_variant,
-        "incremental_revenue": float(deployed_incremental),
-        "best_observed_incremental_revenue": float(max(0.0, best_observed_incremental if best_observed_incremental != -1e18 else 0.0)),
-        "by_variant": by_variant,
-        "control_users": int(control_n),
-        "assumptions": {
-            "arpu": float(arpu),
-            "uses_significance_gate": True,
-            "significance_threshold": 0.05,
-        },
-    }
 
 
 async def _convert_to_csv(data: Dict[str, Any]) -> str:
@@ -953,31 +870,6 @@ async def _compare_segments(segments_analysis: Dict[str, Any]) -> Dict[str, Any]
     }
 
 
-async def _calculate_roi(financial_analysis: Dict[str, Any]) -> Dict[str, Any]:
-    incremental_revenue = float(financial_analysis.get("incremental_revenue", 0.0))
-
-    cost_scenarios = [500.0, 1000.0, 3000.0]
-    rollout_shares = [0.25, 0.5, 1.0]
-
-    matrix: List[Dict[str, Any]] = []
-    for cost in cost_scenarios:
-        for share in rollout_shares:
-            effective_incremental = incremental_revenue * float(share)
-            roi = ((effective_incremental - cost) / cost) * 100.0 if cost > 0 else 0.0
-            matrix.append(
-                {
-                    "estimated_cost": float(cost),
-                    "rollout_share": float(share),
-                    "incremental_revenue": float(effective_incremental),
-                    "roi_percent": float(roi),
-                }
-            )
-
-    return {
-        "base_incremental_revenue": float(incremental_revenue),
-        "scenarios": matrix,
-        "note": "ROI рассчитан по сценариям стоимости и доли rollout вместо фиксированной заглушки",
-    }
 
 
 async def _calculate_performance_metrics(test_history: List[Dict[str, Any]], days: int) -> Dict[str, Any]:

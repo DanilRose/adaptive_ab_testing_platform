@@ -20,7 +20,7 @@ const recommendationLabel: Record<string, { label: string; color: string }> = {
 };
 
 export const ResultsOverviewPage: React.FC = () => {
-  const { timeSeriesData, financialImpact } = useOutletContext<ResultsOutletContext>();
+  const { timeSeriesData } = useOutletContext<ResultsOutletContext>();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
@@ -190,6 +190,7 @@ export const ResultsOverviewPage: React.FC = () => {
             rowKey="variant"
             pagination={false}
             size="small"
+            style={{ color: c.textPrimary }}
           />
         </div>
       </div>
@@ -202,7 +203,8 @@ export const ResultsOverviewPage: React.FC = () => {
   return (
     <>
 
-      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+      <div style={{ color: c.textPrimary }}>
+        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col span={6}>
           <MetricCard title="Победитель" c={c}>
             {timeSeriesData?.winner ? (
@@ -244,7 +246,7 @@ export const ResultsOverviewPage: React.FC = () => {
           <MetricCard title="Проверки корректности" c={c}>
             <Space direction="vertical" size={6} style={{ width: '100%' }}>
               <Tag color={timeSeriesData?.srm_check_passed ? 'success' : 'error'}>
-                Равномерность распределения пользователей: {timeSeriesData?.srm_check_passed ? 'норма' : 'есть перекос'}
+                Равномерность распределения: {timeSeriesData?.srm_check_passed ? 'норма' : 'есть перекос'}
               </Tag>
               <Tag color={timeSeriesData?.guardrails?.passed ? 'success' : 'error'}>
                 Защитные бизнес-ограничения: {timeSeriesData?.guardrails?.passed ? 'соблюдены' : 'нарушены'}
@@ -302,27 +304,15 @@ export const ResultsOverviewPage: React.FC = () => {
         </div>
       </div>
 
-      {financialImpact?.financial_analysis?.best_variant && (
-        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-          <Col span={24}>
-            <MetricCard title="Финансовая оценка" c={c}>
-              <Tag color="blue">Наиболее выгодный вариант: {financialImpact.financial_analysis.best_variant}</Tag>
-              <div style={{ marginTop: 8 }}>
-                <Text type="secondary">Базовый доход на пользователя для расчёта: {financialImpact?.assumed_arpu ?? 100}</Text>
-              </div>
-            </MetricCard>
-          </Col>
-        </Row>
-      )}
-
       {renderResultsTable()}
+      </div>
     </>
   );
 };
 
 const MetricCard: React.FC<{ title: string; c: Record<string, string>; children: React.ReactNode }> = ({ title, c, children }) => (
   <div style={{ borderRadius: 12, border: `1px solid ${c.border}`, backgroundColor: c.panelBg, boxShadow: c.shadow, overflow: 'hidden', height: '100%' }}>
-    <div style={{ padding: '10px 12px', borderBottom: `1px solid ${c.border}`, backgroundColor: c.panelSoft, fontSize: 13, fontWeight: 700 }}>{title}</div>
-    <div style={{ padding: 12 }}>{children}</div>
+    <div style={{ padding: '10px 12px', borderBottom: `1px solid ${c.border}`, backgroundColor: c.panelSoft, fontSize: 13, fontWeight: 700, color: c.textPrimary }}>{title}</div>
+    <div style={{ padding: 12, color: c.textPrimary }}>{children}</div>
   </div>
 );

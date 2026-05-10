@@ -468,6 +468,10 @@ export const ABManager: React.FC = () => {
   };
 
   const fmtDate = (s: string) => s ? new Date(s).toLocaleString('ru-RU') : '—';
+  const fmtPercent = (value: number) => {
+    const safeValue = Number.isFinite(value) ? value : 0;
+    return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(safeValue);
+  };
 
   // Render helpers
   const renderStatCard = (title: string, value: number, tone?: { bg: string; text: string; border: string }) => (
@@ -544,7 +548,7 @@ export const ABManager: React.FC = () => {
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                 <span style={{ fontSize: 12, color: c.textMuted }}>Прогресс эксперимента</span>
-                <span style={{ fontSize: 12, color: c.textPrimary, fontWeight: 700 }}>{progress}%</span>
+                <span style={{ fontSize: 12, color: c.textPrimary, fontWeight: 700 }}>{fmtPercent(progress)}%</span>
               </div>
               <div style={{ height: 8, borderRadius: 999, background: isDark ? '#211f1d' : '#ece7df', overflow: 'hidden' }}>
                 <div style={{ width: `${progress}%`, height: '100%', background: 'linear-gradient(90deg, #d97706, #22c55e)' }} />

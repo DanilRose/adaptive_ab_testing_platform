@@ -105,3 +105,111 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
+
+/* Results page theme overrides for Ant Design + Recharts */
+.results-theme .ant-table,
+.results-theme .ant-table-container,
+.results-theme .ant-table-content,
+.results-theme .ant-table-thead > tr > th,
+.results-theme .ant-table-tbody > tr > td,
+.results-theme .ant-table-tbody > tr > td.ant-table-cell-row-hover,
+.results-theme .ant-table-thead > tr > th.ant-table-cell-row-hover {
+  background: hsl(var(--card)) !important;
+  color: hsl(var(--foreground)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+.results-theme .ant-table-thead > tr > th {
+  background: hsl(var(--secondary)) !important;
+  color: hsl(var(--foreground)) !important;
+  font-weight: 600;
+}
+
+.results-theme .ant-table-tbody > tr.ant-table-row:hover > td {
+  background: hsl(var(--accent)) !important;
+}
+
+.results-theme .ant-table-tbody > tr.ant-table-row-selected > td {
+  background: hsl(var(--accent)) !important;
+}
+
+.results-theme .ant-table-thead > tr > th::before,
+.results-theme .ant-table-tbody > tr > td::before {
+  background: hsl(var(--border)) !important;
+}
+
+.results-theme .ant-table-pagination,
+.results-theme .ant-pagination,
+.results-theme .ant-pagination-item,
+.results-theme .ant-pagination-item-link,
+.results-theme .ant-pagination-item-ellipsis {
+  color: hsl(var(--foreground)) !important;
+}
+
+.results-theme .ant-select-selector,
+.results-theme .ant-select-dropdown,
+.results-theme .ant-select-item {
+  background: hsl(var(--card)) !important;
+  color: hsl(var(--foreground)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+.results-theme .ant-select-item-option-active,
+.results-theme .ant-select-item-option-selected {
+  background: hsl(var(--accent)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.results-theme .ant-alert {
+  background: hsl(var(--accent)) !important;
+  color: hsl(var(--foreground)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+.results-theme .ant-alert-message,
+.results-theme .ant-alert-description {
+  color: hsl(var(--foreground)) !important;
+}
+
+.results-theme .ant-empty-description {
+  color: hsl(var(--muted-foreground)) !important;
+}
+
+.results-theme .recharts-surface {
+  background: hsl(var(--card)) !important;
+}
+
+.results-theme .recharts-cartesian-grid line,
+.results-theme .recharts-cartesian-grid path {
+  stroke: hsl(var(--border)) !important;
+}
+
+.results-theme .recharts-text,
+.results-theme .recharts-label,
+.results-theme .recharts-legend-item-text,
+.results-theme .recharts-default-tooltip {
+  fill: hsl(var(--foreground)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.results-theme .recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: hsl(var(--card)) !important;
+  border-color: hsl(var(--border)) !important;
+  color: hsl(var(--foreground)) !important;
+}
+
+.results-theme .recharts-tooltip-item {
+  color: hsl(var(--foreground)) !important;
+}
+
+.results-theme,
+.results-theme p,
+.results-theme li,
+.results-theme .ant-typography,
+.results-theme .ant-typography span {
+  color: hsl(var(--foreground)) !important;
+}
+
+.results-theme .ant-typography-secondary {
+  color: hsl(var(--muted-foreground)) !important;
+}

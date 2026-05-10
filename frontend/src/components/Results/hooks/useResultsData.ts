@@ -13,40 +13,6 @@ export interface ResultsTestSummary {
   simulation_status?: string;
 }
 
-export interface FinancialImpactResponse {
-  test_id: string;
-  assumed_arpu: number;
-  financial_analysis: {
-    control_variant: string | null;
-    best_variant: string | null;
-    best_observed_variant: string | null;
-    incremental_revenue: number;
-    best_observed_incremental_revenue: number;
-    by_variant: Record<string, {
-      uplift_percent: number;
-      sample_size: number;
-      incremental_revenue: number;
-      p_value_corrected: number | null;
-      significant: boolean;
-    }>;
-    control_users: number;
-    assumptions: {
-      arpu: number;
-      uses_significance_gate: boolean;
-      significance_threshold: number;
-    };
-  };
-  roi_calculation: {
-    base_incremental_revenue: number;
-    scenarios: Array<{
-      estimated_cost: number;
-      rollout_share: number;
-      incremental_revenue: number;
-      roi_percent: number;
-    }>;
-    note: string;
-  };
-}
 
 interface UseResultsDataState {
   tests: ResultsTestSummary[];
@@ -54,7 +20,6 @@ interface UseResultsDataState {
   setSelectedTestId: (testId: string) => void;
   selectedTest: ResultsTestSummary | undefined;
   timeSeriesData: TimeSeriesResponse | null;
-  financialImpact: FinancialImpactResponse | null;
   loading: boolean;
   isSimulating: boolean;
   refreshCurrentTest: () => Promise<void>;
@@ -64,10 +29,10 @@ export const useResultsData = (): UseResultsDataState => {
   const [tests, setTests] = useState<ResultsTestSummary[]>([]);
   const [selectedTestId, setSelectedTestId] = useState<string>('');
   const [timeSeriesData, setTimeSeriesData] = useState<TimeSeriesResponse | null>(null);
-  const [financialImpact, setFinancialImpact] = useState<FinancialImpactResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
   const pollingRef = useRef<number | null>(null);
+  const initialLoadRef = useRef<string | null>(null);
 
   const loadTests = useCallback(async (): Promise<ResultsTestSummary[]> => {
     try {
@@ -87,7 +52,21 @@ export const useResultsData = (): UseResultsDataState => {
         simulation_status: t.simulation_status,
       }));
 
-      setTests(allTests);
+      setTests((prevTests) => {
+        if (prevTests.length !== allTests.length) return allTests;
+
+        const nextById = new Map(allTests.map((test) => [test.test_id, test]));
+        const hasDiff = prevTests.some((test) => {
+          const next = nextById.get(test.test_id);
+          return !next
+            || next.status !== test.status
+            || next.simulation_status !== test.simulation_status
+            || next.total_users !== test.total_users
+            || next.completion_percentage !== test.completion_percentage;
+        });
+
+        return hasDiff ? allTests : prevTests;
+      });
       return allTests;
     } catch (error) {
       console.error('Ошибка загрузки тестов:', error);
@@ -101,17 +80,12 @@ export const useResultsData = (): UseResultsDataState => {
     }
 
     try {
-      const [timeSeriesResponse, financialImpactResponse] = await Promise.all([
-        resultsAPI.getTimeSeriesData(testId),
-        resultsAPI.getFinancialImpact(testId),
-      ]);
+      const timeSeriesResponse = await resultsAPI.getTimeSeriesData(testId);
 
       setTimeSeriesData(timeSeriesResponse.data);
-      setFinancialImpact(financialImpactResponse.data);
     } catch (error) {
       console.error('Ошибка загрузки результатов:', error);
       setTimeSeriesData(null);
-      setFinancialImpact(null);
     } finally {
       if (showLoading) {
         setLoading(false);
@@ -185,14 +159,16 @@ export const useResultsData = (): UseResultsDataState => {
       selectedTest?.status === 'active' ||
       selectedTest?.status === 'paused';
 
-    if (!selectedTestIsRunning) {
+    if (initialLoadRef.current !== selectedTestId) {
       loadTimeSeriesData(selectedTestId, true);
+      initialLoadRef.current = selectedTestId;
+    }
+
+    if (!selectedTestIsRunning) {
       return;
     }
 
     const pollIntervalMs = selectedTest?.simulation_status === 'running' ? 3000 : 7000;
-
-    loadTimeSeriesData(selectedTestId, true);
 
     pollingRef.current = window.setInterval(() => {
       loadTimeSeriesData(selectedTestId, false);
@@ -216,7 +192,6 @@ export const useResultsData = (): UseResultsDataState => {
     setSelectedTestId,
     selectedTest,
     timeSeriesData,
-    financialImpact,
     loading,
     isSimulating,
     refreshCurrentTest,

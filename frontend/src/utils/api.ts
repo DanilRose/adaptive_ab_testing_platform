@@ -112,8 +112,6 @@ export const resultsAPI = {
     api.get(`/results/${testId}/statistical-significance?alpha=${alpha}`),
   getPlatformStats: () => api.get('/results/platform/performance'),
   getTimeSeriesData: (testId: string) => api.get<TimeSeriesResponse>(`/results/${testId}/time-series-data`),
-  getFinancialImpact: (testId: string, arpu: number = 100) =>
-    api.get(`/results/${testId}/financial-impact?arpu=${arpu}`),
 };
 
 // Auth API
