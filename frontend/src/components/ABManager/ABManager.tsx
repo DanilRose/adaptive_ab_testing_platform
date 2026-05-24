@@ -756,7 +756,7 @@ export const ABManager: React.FC = () => {
                     <AlertTriangle size={15} />
                     Нет данных для симуляции
                   </div>
-                  Сначала создайте синтетические данные во вкладке GAN Manager, затем возвращайтесь к запуску A/B тестов.
+                  Сначала создайте синтетические данные во вкладке GAN Менеджер, затем возвращайтесь к запуску A/B тестов.
                 </div>
               )}
 
@@ -923,7 +923,7 @@ export const ABManager: React.FC = () => {
               <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.35px', color: c.textSub, marginBottom: 10 }}>Рекомендации</div>
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: c.textMuted, lineHeight: 1.6 }}>
                 <li>Первый вариант (A) используйте как контрольный</li>
-                <li>Для валидных выводов выбирайте <strong>fixed_experiment</strong></li>
+                <li>Для валидных выводов выбирайте <strong>Фиксированный эксперимент</strong></li>
                 <li>Перед созданием теста проверьте наличие <strong>верного</strong> GAN-датасета</li>
               </ul>
             </div>
@@ -1466,8 +1466,8 @@ const CreateTestForm: React.FC<CreateTestFormProps> = ({ formData, setFormData, 
               onBlur={() => setFocused(null)}
               style={inputStyle(focused === 'trafficSplitType')}
             >
-              <option value="fixed">fixed — равномерное разделение</option>
-              <option value="adaptive">adaptive — адаптивное разделение</option>
+              <option value="fixed">Равномерное разделение (fixed)</option>
+              <option value="adaptive">Адаптивное разделение (adaptive)</option>
             </select>
           </div>
 
@@ -1480,8 +1480,8 @@ const CreateTestForm: React.FC<CreateTestFormProps> = ({ formData, setFormData, 
               onBlur={() => setFocused(null)}
               style={inputStyle(focused === 'analysisMode')}
             >
-              <option value="fixed_experiment">fixed_experiment — валидные выводы</option>
-              <option value="adaptive_bandit">adaptive_bandit — исследовательский режим</option>
+              <option value="fixed_experiment">Фиксированный эксперимент (валидные выводы)</option>
+              <option value="adaptive_bandit">Адаптивный бандит (исследовательский режим)</option>
             </select>
           </div>
         </div>

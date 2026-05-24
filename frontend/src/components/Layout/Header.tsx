@@ -8,14 +8,14 @@ import type { UserRole } from '@/types';
 const roleLabels: Record<UserRole, { label: string; color: string; bg: string }> = {
   developer: { label: 'Разработчик', color: '#92400e', bg: '#fef3c7' },
   analyst: { label: 'Аналитик', color: '#065f46', bg: '#d1fae5' },
-  results_viewer: { label: 'Просмотр_результатов_тестов', color: '#1d4ed8', bg: '#dbeafe' },
+  results_viewer: { label: 'Просмотр результатов', color: '#1d4ed8', bg: '#dbeafe' },
   user: { label: '', color: '#6b7280', bg: '#f3f4f6' },
 };
 
 const roleLabels_dark: Record<UserRole, { label: string; color: string; bg: string }> = {
   developer: { label: 'Разработчик', color: '#fcd34d', bg: 'rgba(252,211,77,0.12)' },
   analyst: { label: 'Аналитик', color: '#6ee7b7', bg: 'rgba(110,231,183,0.12)' },
-  results_viewer: { label: 'Просмотр_результатов_тестов', color: '#93c5fd', bg: 'rgba(147,197,253,0.16)' },
+  results_viewer: { label: 'Просмотр результатов', color: '#93c5fd', bg: 'rgba(147,197,253,0.16)' },
   user: { label: '', color: '#d1d5db', bg: 'rgba(209,213,219,0.12)' },
 };
 

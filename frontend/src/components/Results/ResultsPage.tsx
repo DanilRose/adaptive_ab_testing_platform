@@ -16,6 +16,7 @@ import {
   Bar,
 } from 'recharts';
 import { resultsAPI, abTestAPI } from '../../utils/api';
+import type { TimeSeriesResponse } from '../../types';
 import {
   CheckCircleOutlined,
   WarningOutlined,
@@ -36,59 +37,6 @@ interface TimeSeriesDataPoint {
   confidence_interval_upper: number | null;
 }
 
-interface TimeSeriesResponse {
-  test_id: string;
-  variants: string[];
-  data: TimeSeriesDataPoint[];
-  total_snapshots: number;
-  snapshots_per_variant: number;
-  completion_percentage: number;
-  stopped_early: boolean;
-  early_stop_reason: string | null;
-  early_stopping_enabled?: boolean;
-  current_sequential_look: number;
-  max_sequential_looks: number;
-  srm_check_passed: number | null;
-  srm_p_value: number | null;
-  traffic_split: {
-    variant_counts: Record<string, number>;
-    variant_percentages: Record<string, number>;
-  };
-  winner: string | null;
-  winner_uplift_percent: number;
-  winner_confidence: 'low' | 'medium' | 'high';
-  power_over_time: Array<Record<string, number>>;
-  uplift_over_time: Array<Record<string, number>>;
-  analysis_mode?: 'fixed_experiment' | 'adaptive_bandit';
-  analysis_validity?: 'valid_for_inference' | 'exploration_only' | 'invalid_srm' | 'invalid_guardrails';
-  guardrails?: {
-    enabled: boolean;
-    passed: boolean;
-    failed_metrics: string[];
-    checks: Array<{
-      metric: string;
-      threshold: number;
-      direction: string;
-      observed: number;
-      passed: boolean;
-    }>;
-  };
-  p_values_corrected_latest?: Record<string, number>;
-  quality_gate?: {
-    status: 'green' | 'yellow' | 'red';
-    passed: boolean;
-    passed_checks: number;
-    total_checks: number;
-    checks: Array<{
-      id: string;
-      title: string;
-      passed: boolean;
-      actual: unknown;
-      threshold: unknown;
-      known?: boolean;
-    }>;
-  };
-}
 
 interface TestSummary {
   test_id: string;
@@ -897,8 +845,8 @@ export const ResultsPage: React.FC = () => {
               style={{ marginBottom: 16 }}
               type="warning"
               showIcon
-              message="Режим adaptive_bandit"
-              description="Результаты используются только для исследования. Для финального причинно-следственного решения требуется fixed_experiment."
+              message="Режим адаптивного бандита"
+              description="Результаты используются только для исследования. Для финального причинно-следственного решения требуется фиксированный эксперимент."
             />
           )}
 
@@ -955,180 +903,189 @@ export const ResultsPage: React.FC = () => {
             </Col>
           </Row>
 
-          {/* Статус теста */}
-          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            <Col span={8}>
-              <Card size="small" title="🏆 Победитель теста">
-                {timeSeriesData.winner ? (
-                  <div>
-                    <Tag color="success" style={{ fontSize: 14, padding: '4px 12px' }}>
-                      Вариант {timeSeriesData.winner}
-                    </Tag>
-                    <div style={{ marginTop: 8 }}>
-                      <Text>Прирост: </Text>
-                      <Text strong type="success">+{timeSeriesData.winner_uplift_percent.toFixed(2)}%</Text>
-                    </div>
-                    <div>
-                      <Text>Уверенность: </Text>
-                      <Tag color={confidenceLabel[timeSeriesData.winner_confidence]?.color}>
-                        {confidenceLabel[timeSeriesData.winner_confidence]?.label || timeSeriesData.winner_confidence}
+          {/* Единый блок рекомендаций и валидности */}
+          <Card
+            size="small"
+            style={{ marginBottom: 16, borderRadius: 12 }}
+            title="🚀 Рекомендация к внедрению"
+            extra={
+              <Tag color={timeSeriesData.winner ? 'success' : 'default'} style={{ fontWeight: 600 }}>
+                {timeSeriesData.winner ? 'Решение готово' : 'Недостаточно оснований для внедрения'}
+              </Tag>
+            }
+          >
+            <Row gutter={[16, 16]} align="middle" style={{ marginBottom: 12 }}>
+              <Col xs={24} md={10}>
+                <Card
+                  size="small"
+                  style={{
+                    background: 'linear-gradient(135deg, #f6ffed 0%, #ffffff 100%)',
+                    borderColor: '#b7eb8f',
+                    borderRadius: 10,
+                  }}
+                >
+                  {timeSeriesData.winner ? (
+                    <Space direction="vertical" size={4}>
+                      <Text type="secondary">Победитель</Text>
+                      <Tag color="success" style={{ fontSize: 16, padding: '6px 12px', width: 'fit-content' }}>
+                        Вариант {timeSeriesData.winner}
                       </Tag>
-                    </div>
-                  </div>
-                ) : (
-                  <div>
-                    <Tag color="default">Победитель не определён</Tag>
-                    <div style={{ marginTop: 4 }}>
+                      <Text>
+                        Прирост:{' '}
+                        <Text strong type="success">+{timeSeriesData.winner_uplift_percent.toFixed(2)}%</Text>
+                      </Text>
+                      <Text>
+                        Уровень уверенности:{' '}
+                        <Tag color={confidenceLabel[timeSeriesData.winner_confidence]?.color}>
+                          {confidenceLabel[timeSeriesData.winner_confidence]?.label || timeSeriesData.winner_confidence}
+                        </Tag>
+                      </Text>
+                    </Space>
+                  ) : (
+                    <Space direction="vertical" size={4}>
+                      <Text type="secondary">Победитель</Text>
+                      <Tag color="default">Не определён</Tag>
                       <Text type="secondary" style={{ fontSize: 12 }}>
                         Недостаточно данных или статистической значимости
                       </Text>
-                    </div>
-                  </div>
-                )}
-              </Card>
-            </Col>
-            <Col span={8}>
-              <Card size="small" title="🔄 Последовательные проверки">
+                    </Space>
+                  )}
+                </Card>
+              </Col>
+
+              <Col xs={24} md={14}>
+                <Row gutter={[12, 12]}>
+                  <Col xs={24} sm={12}>
+                    <Card size="small" style={{ borderRadius: 10 }}>
+                      <Statistic
+                        title="Валидность анализа"
+                        value={timeSeriesData.analysis_validity === 'valid_for_inference' ? 'Валиден' : 'Ограничен'}
+                        valueStyle={{
+                          color: timeSeriesData.analysis_validity === 'valid_for_inference' ? '#389e0d' : '#cf1322',
+                          fontSize: 18,
+                        }}
+                      />
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {timeSeriesData.analysis_validity === 'valid_for_inference'
+                          ? 'Для итогового статистического вывода'
+                          : 'Требуется дополнительная проверка'}
+                      </Text>
+                    </Card>
+                  </Col>
+
+                  <Col xs={24} sm={12}>
+                    <Card size="small" style={{ borderRadius: 10 }}>
+                      <Statistic
+                        title="Равномерность распределения (SRM)"
+                        value={
+                          timeSeriesData.srm_check_passed === null
+                            ? 'Нет данных'
+                            : timeSeriesData.srm_check_passed
+                              ? 'Норма'
+                              : 'Нарушение'
+                        }
+                        valueStyle={{
+                          color:
+                            timeSeriesData.srm_check_passed === null
+                              ? '#8c8c8c'
+                              : timeSeriesData.srm_check_passed
+                                ? '#389e0d'
+                                : '#cf1322',
+                          fontSize: 18,
+                        }}
+                      />
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        p = {timeSeriesData.srm_p_value?.toFixed(4) || 'Н/Д'}
+                      </Text>
+                    </Card>
+                  </Col>
+
+                  <Col xs={24} sm={12}>
+                    <Card size="small" style={{ borderRadius: 10 }}>
+                      <Statistic
+                        title="Guardrails"
+                        value={timeSeriesData.guardrails?.enabled ? (timeSeriesData.guardrails?.passed ? 'Соблюдены' : 'Нарушены') : 'Не включены'}
+                        valueStyle={{
+                          color: !timeSeriesData.guardrails?.enabled
+                            ? '#8c8c8c'
+                            : timeSeriesData.guardrails?.passed
+                              ? '#389e0d'
+                              : '#cf1322',
+                          fontSize: 18,
+                        }}
+                      />
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {timeSeriesData.guardrails?.enabled
+                          ? ((timeSeriesData.guardrails?.failed_metrics || []).length > 0
+                            ? `Нарушения: ${(timeSeriesData.guardrails?.failed_metrics || []).join(', ')}`
+                            : 'Защитные ограничения соблюдены')
+                          : 'Защитные ограничения не активированы'}
+                      </Text>
+                    </Card>
+                  </Col>
+
+                  <Col xs={24} sm={12}>
+                    <Card size="small" style={{ borderRadius: 10 }}>
+                      <Statistic
+                        title="Общая оценка качества данных"
+                        value={
+                          timeSeriesData.quality_gate?.status === 'green'
+                            ? 'Высокая'
+                            : timeSeriesData.quality_gate?.status === 'yellow'
+                              ? 'Средняя'
+                              : timeSeriesData.quality_gate?.status === 'red'
+                                ? 'Низкая'
+                                : 'Нет данных'
+                        }
+                        valueStyle={{
+                          color:
+                            timeSeriesData.quality_gate?.status === 'green'
+                              ? '#389e0d'
+                              : timeSeriesData.quality_gate?.status === 'red'
+                                ? '#cf1322'
+                                : '#d48806',
+                          fontSize: 18,
+                        }}
+                      />
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {timeSeriesData.quality_gate
+                          ? `Проверки: ${timeSeriesData.quality_gate.passed_checks}/${timeSeriesData.quality_gate.total_checks}`
+                          : 'Контроль качества ещё не рассчитан'}
+                      </Text>
+                    </Card>
+                  </Col>
+                </Row>
+              </Col>
+            </Row>
+
+            <Alert
+              type={timeSeriesData.winner && timeSeriesData.analysis_validity === 'valid_for_inference' && (timeSeriesData.srm_check_passed !== false) && (timeSeriesData.guardrails?.enabled ? timeSeriesData.guardrails?.passed : true) ? 'success' : 'warning'}
+              showIcon
+              message={timeSeriesData.winner
+                ? `Победитель: вариант ${timeSeriesData.winner}`
+                : 'Победитель пока не определён'}
+              description={
+                <Space direction="vertical" size={2}>
+                  <Text>Скорректированное p-значение (метод Холма): {timeSeriesData.winner ? (timeSeriesData.p_values_corrected_latest?.[timeSeriesData.winner]?.toFixed(4) ?? 'Н/Д') : 'Н/Д'}</Text>
+                  <Text>Режим анализа: {timeSeriesData.analysis_mode || 'fixed_experiment'}</Text>
+                </Space>
+              }
+            />
+
+            <div style={{ marginTop: 12 }}>
+              <Card size="small" title="🔄 Последовательные проверки" style={{ borderRadius: 10 }}>
                 <Space direction="vertical" size={6} style={{ width: '100%' }}>
                   <Tag color={timeSeriesData.early_stopping_enabled ? 'green' : 'default'}>
                     Ранняя остановка: {timeSeriesData.early_stopping_enabled ? 'включена' : 'выключена'}
                   </Tag>
-
                   <Progress
                     percent={Math.round((timeSeriesData.current_sequential_look / Math.max(1, timeSeriesData.max_sequential_looks)) * 100)}
                     format={() => `${timeSeriesData.current_sequential_look} / ${timeSeriesData.max_sequential_looks}`}
                   />
-
-                  <Text type="secondary" style={{ fontSize: 11, marginTop: 4, display: 'block' }}>
-                    {timeSeriesData.early_stopping_enabled
-                      ? 'Промежуточные проверки могут остановить тест досрочно при достижении критериев.'
-                      : 'Промежуточные проверки выполняются для мониторинга; досрочная остановка отключена.'}
-                  </Text>
                 </Space>
               </Card>
-            </Col>
-            <Col span={8}>
-              <Card size="small" title="⚖️ Равномерность трафика (проверка SRM)">
-                {timeSeriesData.srm_check_passed === null ? (
-                  <div>
-                    <Tag color="default">Нет данных</Tag>
-                    <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>
-                      SRM — проверка на перекос трафика между вариантами (нарушение равномерности выборки).
-                    </div>
-                  </div>
-                ) : timeSeriesData.srm_check_passed ? (
-                  <div>
-                    <Tag color="success">✓ Пройдено (p = {timeSeriesData.srm_p_value?.toFixed(4) || 'Н/Д'})</Tag>
-                    <div style={{ fontSize: 11, color: '#52c41a', marginTop: 4 }}>
-                      Трафик распределён равномерно. Тест корректен.
-                    </div>
-                  </div>
-                ) : (
-                  <div>
-                    <Tag color="error">✗ Нарушение (p = {timeSeriesData.srm_p_value?.toFixed(4) || 'Н/Д'})</Tag>
-                    <div style={{ fontSize: 11, color: '#ff4d4f', marginTop: 4 }}>
-                      Обнаружен перекос трафика! Результаты могут быть недостоверны.
-                    </div>
-                  </div>
-                )}
-              </Card>
-            </Col>
-          </Row>
-
-          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            <Col span={24}>
-              <Card size="small" title="🚦 Контроль качества (валидность результата)">
-                {timeSeriesData.quality_gate ? (
-                  <>
-                    <Space style={{ marginBottom: 12 }} wrap>
-                      <Tag color={
-                        timeSeriesData.quality_gate.status === 'green'
-                          ? 'success'
-                          : timeSeriesData.quality_gate.status === 'red'
-                            ? 'error'
-                            : 'warning'
-                      }>
-                        Статус: {timeSeriesData.quality_gate.status.toUpperCase()}
-                      </Tag>
-                      <Tag color={timeSeriesData.quality_gate.passed ? 'success' : 'default'}>
-                        Пройдено: {timeSeriesData.quality_gate.passed_checks}/{timeSeriesData.quality_gate.total_checks}
-                      </Tag>
-                    </Space>
-
-                    <Table
-                      size="small"
-                      pagination={false}
-                      rowKey={(row: any) => row.id}
-                      dataSource={timeSeriesData.quality_gate.checks || []}
-                      columns={[
-                        {
-                          title: 'Проверка',
-                          dataIndex: 'title',
-                          key: 'title',
-                        },
-                        {
-                          title: 'Статус',
-                          key: 'passed',
-                          render: (_: any, row: any) => (
-                            <Tag color={row.passed ? 'success' : 'error'}>
-                              {row.passed ? 'PASS' : 'FAIL'}
-                            </Tag>
-                          ),
-                        },
-                        {
-                          title: 'Порог',
-                          dataIndex: 'threshold',
-                          key: 'threshold',
-                          render: (v: unknown) => <Text code>{typeof v === 'string' ? v : JSON.stringify(v)}</Text>,
-                        },
-                        {
-                          title: 'Факт',
-                          dataIndex: 'actual',
-                          key: 'actual',
-                          render: (v: unknown) => (
-                            <Text code style={{ whiteSpace: 'pre-wrap' }}>
-                              {typeof v === 'string' ? v : JSON.stringify(v)}
-                            </Text>
-                          ),
-                        },
-                      ]}
-                    />
-                  </>
-                ) : (
-                  <Text type="secondary">Контроль качества ещё не рассчитан</Text>
-                )}
-              </Card>
-            </Col>
-
-            <Col span={12}>
-              <Card size="small" title="🧪 Режим анализа">
-                <Tag color={timeSeriesData.analysis_mode === 'adaptive_bandit' ? 'orange' : 'green'}>
-                  {timeSeriesData.analysis_mode || 'fixed_experiment'}
-                </Tag>
-                <div style={{ marginTop: 8 }}>
-                  <Text>Валидность статистического вывода: </Text>
-                  <Tag color={timeSeriesData.analysis_validity === 'valid_for_inference' ? 'success' : 'error'}>
-                    {timeSeriesData.analysis_validity || 'unknown'}
-                  </Tag>
-                </div>
-              </Card>
-            </Col>
-            <Col span={12}>
-              <Card size="small" title="📉 Скорректированные p-значения (метод Холма)">
-                {Object.keys(timeSeriesData.p_values_corrected_latest || {}).length === 0 ? (
-                  <Text type="secondary">Нет данных</Text>
-                ) : (
-                  <Space wrap>
-                    {Object.entries(timeSeriesData.p_values_corrected_latest || {}).map(([variant, p]) => (
-                      <Tag key={variant} color={p < 0.05 ? 'success' : 'default'}>
-                        {variant}: {p.toFixed(4)}
-                      </Tag>
-                    ))}
-                  </Space>
-                )}
-              </Card>
-            </Col>
-          </Row>
+            </div>
+          </Card>
 
           {/* Переключатель графиков */}
           <Card style={{ marginBottom: 16 }}>

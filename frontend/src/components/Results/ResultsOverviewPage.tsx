@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
-import { Alert, Col, Row, Space, Table, Tag, Typography } from 'antd';
-import { CheckCircleOutlined, WarningOutlined } from '@ant-design/icons';
+import { Col, Row, Space, Table, Tag, Typography } from 'antd';
+import { CheckCircleOutlined, RocketOutlined, WarningOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import { useTheme } from '@/context/ThemeContext';
 import type { ResultsOutletContext } from './ResultsSectionPage';
@@ -17,6 +17,29 @@ const recommendationLabel: Record<string, { label: string; color: string }> = {
   deploy: { label: 'Внедрять', color: 'success' },
   do_not_deploy: { label: 'Не внедрять', color: 'error' },
   need_more_data: { label: 'Требуется больше данных', color: 'warning' },
+};
+
+const validityLabel: Record<string, { label: string; color: string }> = {
+  valid_for_inference: { label: 'Валиден для итогового вывода', color: 'success' },
+  exploration_only: { label: 'Только исследовательский режим', color: 'warning' },
+  invalid_srm: { label: 'Невалиден: перекос трафика', color: 'error' },
+  invalid_guardrails: { label: 'Невалиден: нарушены защитные метрики', color: 'error' },
+};
+
+const qualityLabel: Record<string, { label: string; color: string }> = {
+  green: { label: 'Высокая', color: 'success' },
+  yellow: { label: 'Средняя', color: 'warning' },
+  red: { label: 'Низкая', color: 'error' },
+};
+
+type ValueTone = 'success' | 'warning' | 'danger' | 'secondary' | 'default';
+
+const TONE_TO_TAG: Record<ValueTone, string> = {
+  success: 'success',
+  warning: 'warning',
+  danger: 'error',
+  secondary: 'default',
+  default: 'default',
 };
 
 export const ResultsOverviewPage: React.FC = () => {
@@ -200,113 +223,179 @@ export const ResultsOverviewPage: React.FC = () => {
   const recommendation = recommendationLabel[timeSeriesData?.recommendation_status || 'need_more_data']
     || recommendationLabel.need_more_data;
 
+  const validity = validityLabel[timeSeriesData?.analysis_validity || 'exploration_only']
+    || { label: 'Неизвестно', color: 'default' };
+
+  const quality = qualityLabel[timeSeriesData?.quality_gate?.status || 'yellow']
+    || { label: 'Средняя', color: 'warning' };
+
+  const toTone = (color?: string): ValueTone => {
+    if (!color) return 'default';
+    if (['success', 'green'].includes(color)) return 'success';
+    if (['warning', 'orange'].includes(color)) return 'warning';
+    if (['error', 'red'].includes(color)) return 'danger';
+    return color as ValueTone;
+  };
+
+  const correctedWinnerPValue =
+    timeSeriesData?.winner && timeSeriesData?.p_values_corrected_latest?.[timeSeriesData.winner] !== undefined
+      ? Number(timeSeriesData.p_values_corrected_latest[timeSeriesData.winner]).toFixed(4)
+      : 'Н/Д';
+
+  const winnerUplift =
+    typeof timeSeriesData?.winner_uplift_percent === 'number'
+      ? `${timeSeriesData.winner_uplift_percent >= 0 ? '+' : ''}${timeSeriesData.winner_uplift_percent.toFixed(2)}%`
+      : 'Н/Д';
+
+  const upliftTone: ValueTone = typeof timeSeriesData?.winner_uplift_percent === 'number'
+    ? (timeSeriesData.winner_uplift_percent >= 0 ? 'success' : 'danger')
+    : 'secondary';
+
+  const pValueTone: ValueTone = correctedWinnerPValue !== 'Н/Д'
+    ? (Number(correctedWinnerPValue) < 0.05 ? 'success' : 'danger')
+    : 'secondary';
+
+  const confidenceTone: ValueTone = toTone(confidenceLabel[timeSeriesData?.winner_confidence || 'low']?.color);
+
+  const validityTone: ValueTone = toTone(validity.color);
+
+  const srmTone: ValueTone = timeSeriesData?.srm_check_passed ? 'success' : 'danger';
+
+  const guardrailsTone: ValueTone = timeSeriesData?.guardrails?.passed ? 'success' : 'danger';
+
+  const qualityTone: ValueTone = toTone(quality.color);
+
+  const rolloutTone: ValueTone = timeSeriesData?.rollout_hint ? 'warning' : 'secondary';
+
+  const recommendationDetails = () => {
+    if (timeSeriesData?.recommendation_status === 'deploy') {
+      const rolloutHint = timeSeriesData?.rollout_hint ? `Рекомендуется поэтапная выкатка в прод: ${timeSeriesData.rollout_hint}.` : 'Можно внедрять сразу.';
+      return ` ${rolloutHint} При запуске — мониторинг метрик и стоп-условия при ухудшении.`;
+    }
+    if (timeSeriesData?.recommendation_status === 'do_not_deploy') {
+      return 'Внедрять не рекомендуется: прирост недостаточен/отрицательный либо есть риски по качеству данных и защитных ограничениях. Продолжайте тест или пересмотрите гипотезу.';
+    }
+    return 'Требуется больше данных: дождитесь достаточной статистики и подтвердите стабильность качества данных перед решением о внедрении.';
+  };
+
   return (
-    <>
-
-      <div style={{ color: c.textPrimary }}>
-        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col span={6}>
-          <MetricCard title="Победитель" c={c}>
-            {timeSeriesData?.winner ? (
-              <Space direction="vertical" size={4}>
-                <Tag color="success">Вариант {timeSeriesData.winner}</Tag>
-                <Text strong type="success">Прирост: +{timeSeriesData.winner_uplift_percent.toFixed(2)}%</Text>
-              </Space>
-            ) : (
-              <Tag color="default">Победитель не определён</Tag>
-            )}
-          </MetricCard>
-        </Col>
-
-        <Col span={6}>
-          <MetricCard title="Уровень уверенности" c={c}>
-            <Tag color={confidenceLabel[timeSeriesData?.winner_confidence || 'low']?.color || 'default'}>
-              {confidenceLabel[timeSeriesData?.winner_confidence || 'low']?.label || 'Н/Д'}
-            </Tag>
-          </MetricCard>
-        </Col>
-
-        <Col span={6}>
-          <MetricCard title="Валидность анализа" c={c}>
-            <Tag color={timeSeriesData?.analysis_validity === 'valid_for_inference' ? 'success' : 'error'}>
-              {timeSeriesData?.analysis_validity === 'valid_for_inference'
-                ? 'Валиден для итогового вывода'
-                : timeSeriesData?.analysis_validity === 'exploration_only'
-                  ? 'Только исследовательский режим'
-                  : timeSeriesData?.analysis_validity === 'invalid_srm'
-                    ? 'Невалиден: перекос трафика'
-                    : timeSeriesData?.analysis_validity === 'invalid_guardrails'
-                      ? 'Невалиден: нарушены защитные метрики'
-                      : 'Неизвестно'}
-            </Tag>
-          </MetricCard>
-        </Col>
-
-        <Col span={6}>
-          <MetricCard title="Проверки корректности" c={c}>
-            <Space direction="vertical" size={6} style={{ width: '100%' }}>
-              <Tag color={timeSeriesData?.srm_check_passed ? 'success' : 'error'}>
-                Равномерность распределения: {timeSeriesData?.srm_check_passed ? 'норма' : 'есть перекос'}
-              </Tag>
-              <Tag color={timeSeriesData?.guardrails?.passed ? 'success' : 'error'}>
-                Защитные бизнес-ограничения: {timeSeriesData?.guardrails?.passed ? 'соблюдены' : 'нарушены'}
-              </Tag>
-              <Tag
-                color={
-                  timeSeriesData?.quality_gate?.status === 'green'
-                    ? 'success'
-                    : timeSeriesData?.quality_gate?.status === 'red'
-                      ? 'error'
-                      : 'warning'
-                }
-              >
-                Общая оценка качества данных: {timeSeriesData?.quality_gate?.status === 'green'
-                  ? 'высокая'
-                  : timeSeriesData?.quality_gate?.status === 'red'
-                    ? 'низкая'
-                    : 'средняя'}
-              </Tag>
-            </Space>
-          </MetricCard>
-        </Col>
-      </Row>
-
-      <div style={{ borderRadius: 14, border: `1px solid ${c.border}`, backgroundColor: c.panelBg, boxShadow: c.shadow, overflow: 'hidden', marginBottom: 16 }}>
+    <div style={{ color: c.textPrimary }}>
+      <div
+        style={{
+          borderRadius: 14,
+          border: `1px solid ${c.border}`,
+          backgroundColor: c.panelBg,
+          boxShadow: c.shadow,
+          overflow: 'hidden',
+          marginBottom: 16,
+        }}
+      >
         <div style={{ padding: '12px 14px', borderBottom: `1px solid ${c.border}`, backgroundColor: c.panelSoft, fontSize: 14, fontWeight: 700, color: c.textPrimary }}>
-          Рекомендация к внедрению
+          Итог эксперимента
         </div>
-        <div style={{ padding: 14 }}>
-          <Space direction="vertical" size={10} style={{ width: '100%' }}>
-            <Tag color={recommendation.color} style={{ width: 'fit-content', fontSize: 14, padding: '4px 12px' }}>
-              {recommendation.label}
-            </Tag>
+        <div style={{ padding: 16 }}>
+          <Row gutter={[16, 16]} align="middle">
+            <Col xs={24} md={14}>
+              <Space direction="vertical" size={8}>
+                <Text type="secondary" style={{ fontSize: 12 }}>Победитель</Text>
+                {timeSeriesData?.winner ? (
+                  <Space align="center" wrap>
+                    <Tag color="success" style={{ fontSize: 15, padding: '4px 12px' }}>Вариант {timeSeriesData.winner}</Tag>
+                    <Text strong style={{ fontSize: 24, color: c.textPrimary }}>{winnerUplift}</Text>
+                  </Space>
+                ) : (
+                  <Tag color="default">Победитель не определён</Tag>
+                )}
+              </Space>
+            </Col>
 
-            {(timeSeriesData?.recommendation_reason || []).length > 0 ? (
-              <ul style={{ margin: 0, paddingLeft: 20 }}>
+            <Col xs={24} md={10}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>Рекомендация</Text>
+                <Tag color={recommendation.color} icon={<RocketOutlined />} style={{ width: 'fit-content', fontSize: 14, padding: '4px 12px' }}>
+                  {recommendation.label}
+                </Tag>
+                <Text style={{ color: c.textMuted }}>{recommendationDetails()}</Text>
+              </Space>
+            </Col>
+          </Row>
+
+          {(timeSeriesData?.recommendation_reason || []).length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <Text type="secondary">Основания решения:</Text>
+              <ul style={{ margin: '6px 0 0 0', paddingLeft: 18 }}>
                 {(timeSeriesData?.recommendation_reason || []).map((reason, idx) => (
                   <li key={`${reason}-${idx}`}>
                     <Text>{reason}</Text>
                   </li>
                 ))}
               </ul>
-            ) : (
-              <Text type="secondary">Причины решения не предоставлены сервером</Text>
-            )}
-
-            {timeSeriesData?.rollout_hint && (
-              <Alert
-                type="info"
-                showIcon
-                message={`Подсказка по поэтапному запуску: ${timeSeriesData.rollout_hint}`}
-              />
-            )}
-          </Space>
+            </div>
+          )}
         </div>
       </div>
 
+      <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <Col xs={24} md={8}>
+          <MetricCard title="Ключевые метрики" c={c}>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <MetricRow label="Прирост" value={winnerUplift} strong valueTone={upliftTone} />
+              <MetricRow
+                label="Скорректированное p-значение"
+                value={correctedWinnerPValue}
+                valueTone={pValueTone}
+              />
+              <MetricRow
+                label="Уровень уверенности"
+                value={confidenceLabel[timeSeriesData?.winner_confidence || 'low']?.label || 'Н/Д'}
+                valueTone={confidenceTone}
+              />
+            </Space>
+          </MetricCard>
+        </Col>
+
+        <Col xs={24} md={8}>
+          <MetricCard title="Валидность и проверки" c={c}>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <MetricRow
+                label="Итог валидности"
+                value={validity.label}
+                valueTone={validityTone}
+              />
+              <MetricRow
+                label="Равномерность трафика (SRM)"
+                value={timeSeriesData?.srm_check_passed ? 'Пройдена' : 'Есть перекос'}
+                valueTone={srmTone}
+              />
+              <MetricRow
+                label="Защитные ограничения"
+                value={timeSeriesData?.guardrails?.passed ? 'Соблюдены' : 'Нарушены'}
+                valueTone={guardrailsTone}
+              />
+            </Space>
+          </MetricCard>
+        </Col>
+
+        <Col xs={24} md={8}>
+          <MetricCard title="Качество данных и выкатка в прод" c={c}>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <MetricRow
+                label="Оценка качества данных"
+                value={quality.label}
+                valueTone={qualityTone}
+              />
+              <MetricRow
+                label="Подсказка по раскатке"
+                value={timeSeriesData?.rollout_hint || 'Не задана'}
+                valueTone={rolloutTone}
+              />
+            </Space>
+          </MetricCard>
+        </Col>
+      </Row>
+
       {renderResultsTable()}
-      </div>
-    </>
+    </div>
   );
 };
 
@@ -314,5 +403,23 @@ const MetricCard: React.FC<{ title: string; c: Record<string, string>; children:
   <div style={{ borderRadius: 12, border: `1px solid ${c.border}`, backgroundColor: c.panelBg, boxShadow: c.shadow, overflow: 'hidden', height: '100%' }}>
     <div style={{ padding: '10px 12px', borderBottom: `1px solid ${c.border}`, backgroundColor: c.panelSoft, fontSize: 13, fontWeight: 700, color: c.textPrimary }}>{title}</div>
     <div style={{ padding: 12, color: c.textPrimary }}>{children}</div>
+  </div>
+);
+
+const MetricRow: React.FC<{
+  label: string;
+  value: string;
+  valueTone?: ValueTone;
+  strong?: boolean;
+}> = ({
+  label,
+  value,
+  valueTone = 'default',
+}) => (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <Text type="secondary" style={{ fontSize: 12 }}>{label}</Text>
+    <Tag color={TONE_TO_TAG[valueTone]} style={{ width: 'fit-content', margin: 0 }}>
+      {value}
+    </Tag>
   </div>
 );

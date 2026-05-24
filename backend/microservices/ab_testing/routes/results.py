@@ -469,11 +469,11 @@ async def get_time_series_chart_data(
 
         recommendation_reason: List[str] = [
             f"Победитель: {'определён (' + str(winner) + ')' if winner_present else 'не определён'}",
-            f"Скорректированное p-value winner: {winner_corrected_p:.4f} ({'OK' if winner_p_ok else 'FAIL'})",
-            f"Валидность анализа: {test.analysis_validity or 'unknown'} ({'OK' if analysis_valid else 'FAIL'})",
-            f"SRM check: {'PASS' if srm_passed is True else ('FAIL' if srm_passed is False else 'N/A')}",
-            f"Guardrails: {'PASS' if guardrails_passed else 'FAIL'}",
-            f"Uplift winner: {float(best_uplift):.2f}% ({'OK' if uplift_positive else 'FAIL'})",
+            f"Скорректированное p-значение победителя: {winner_corrected_p:.4f} ({'норма' if winner_p_ok else 'не норма'})",
+            f"Валидность анализа: {_translate_analysis_validity(test.analysis_validity)} ({'норма' if analysis_valid else 'не норма'})",
+            f"Проверка равномерности трафика (SRM): {'пройдена' if srm_passed is True else ('не пройдена' if srm_passed is False else 'нет данных')}",
+            f"Защитные ограничения (guardrails): {'соблюдены' if guardrails_passed else 'нарушены'}",
+            f"Прирост победителя: {float(best_uplift):.2f}% ({'норма' if uplift_positive else 'не норма'})",
         ]
 
         hard_blockers = [
@@ -535,6 +535,16 @@ async def get_time_series_chart_data(
 
 def _as_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _translate_analysis_validity(validity: Any) -> str:
+    mapping = {
+        "valid_for_inference": "валиден для итогового вывода",
+        "exploration_only": "только исследовательский режим",
+        "invalid_srm": "невалиден: перекос трафика",
+        "invalid_guardrails": "невалиден: нарушены защитные метрики",
+    }
+    return mapping.get(str(validity or ""), str(validity or "нет данных"))
 
 
 def _safe_float(value: Any) -> Optional[float]:
