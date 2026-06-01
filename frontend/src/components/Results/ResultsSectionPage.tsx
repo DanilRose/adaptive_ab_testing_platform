@@ -83,7 +83,7 @@ export const ResultsSectionPage: React.FC = () => {
 
       {isSimulating && (
         <Alert
-          message="Симуляция запущена"
+          message="Тест запущен"
           description="Данные обновляются в реальном времени каждые 3 секунды."
           type="info"
           showIcon

@@ -619,15 +619,6 @@ def delete_template_by_id(db: Session, template_id: int) -> bool:
 
 
 def seed_default_templates(db: Session) -> int:
-    """
-    Полностью заменяет системные шаблоны (created_by='system') на новую расширенную коллекцию.
-
-    Важно:
-    - старые системные шаблоны удаляются полностью;
-    - пользовательские шаблоны (created_by != 'system') не затрагиваются;
-    - создаётся 24 новых шаблона, покрывающих A/B/C+ тесты, adaptive/bandit,
-      early stopping, генерацию синтетики и GAN-конфиги.
-    """
     db.query(TemplateORM).filter(TemplateORM.created_by == "system").delete(synchronize_session=False)
 
     defaults = [
@@ -963,7 +954,7 @@ def seed_default_templates(db: Session) -> int:
                 "trafficSplitType": "fixed",
                 "analysisMode": "fixed_experiment",
                 "simulationDurationMinutes": 25,
-                "variantEffects": {"B": {"conversion": 1.04}},
+                "variantEffects": {"B": {"conversion": 1.10}},
                 "earlyStoppingEnabled": False,
                 "early_stopping_enabled": False,
             },
@@ -1011,9 +1002,9 @@ def seed_default_templates(db: Session) -> int:
                 "analysisMode": "fixed_experiment",
                 "simulationDurationMinutes": 35,
                 "variantEffects": {
-                    "B": {"ctr": 1.01},
-                    "C": {"ctr": 1.02},
-                    "D": {"ctr": 1.07},
+                    "B": {"ctr": 1.10},
+                    "C": {"ctr": 1.12},
+                    "D": {"ctr": 1.23},
                 },
                 "earlyStoppingEnabled": False,
                 "early_stopping_enabled": False,
@@ -1038,6 +1029,10 @@ def seed_default_templates(db: Session) -> int:
                 "trafficSplitType": "adaptive",
                 "analysisMode": "adaptive_bandit",
                 "simulationDurationMinutes": 25,
+                "variantEffects": {
+                    "B": {"ctr": 1.10},
+                    "C": {"ctr": 1.12},
+                },
                 "earlyStoppingEnabled": False,
                 "early_stopping_enabled": False,
             },

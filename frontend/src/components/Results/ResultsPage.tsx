@@ -784,7 +784,7 @@ export const ResultsPage: React.FC = () => {
 
       {isSimulating && (
         <Alert
-          message="🔄 Симуляция запущена"
+          message=" Симуляция запущена"
           description="Данные обновляются в реальном времени каждые 3 секунды."
           type="info"
           showIcon
@@ -913,7 +913,7 @@ export const ResultsPage: React.FC = () => {
           <Card
             size="small"
             style={{ marginBottom: 16, borderRadius: 12 }}
-            title="🚀 Рекомендация к внедрению"
+            title="Рекомендация к внедрению"
             extra={
               <Tag color={timeSeriesData.winner ? 'success' : 'default'} style={{ fontWeight: 600 }}>
                 {timeSeriesData.winner ? 'Решение готово' : 'Недостаточно оснований для внедрения'}

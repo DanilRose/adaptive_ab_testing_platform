@@ -22,6 +22,8 @@ import type { ResultsOutletContext } from './ResultsSectionPage';
 const { Option } = Select;
 const { Text, Paragraph } = Typography;
 
+const MIN_SAMPLE_PER_VARIANT_FOR_SIGNIFICANCE = 300;
+
 const CHART_DESCRIPTIONS: Record<string, { title: string; description: string; whatItShows: string; howToRead: string; impact: string }> = {
   cumulative: {
     title: 'Накопленная метрика',
@@ -120,6 +122,32 @@ export const ResultsChartsPage: React.FC = () => {
       D: '#f5222d',
     };
     return variantColors[variant] || '#722ed1';
+  };
+
+  const finalSnapshot = chartData.length > 0 ? chartData[chartData.length - 1] : null;
+  const minSampleSizeAcrossVariants = timeSeriesData?.variants?.length
+    ? Math.min(...timeSeriesData.variants.map((variant) => Number(finalSnapshot?.[variant]?.sample_size ?? 0)))
+    : 0;
+  const showInsufficientSampleBanner = minSampleSizeAcrossVariants > 0 && minSampleSizeAcrossVariants < MIN_SAMPLE_PER_VARIANT_FOR_SIGNIFICANCE;
+
+  const renderInsufficientSampleNotice = () => {
+    if (!showInsufficientSampleBanner) return null;
+    return (
+      <div
+        style={{
+          margin: '0 12px 8px',
+          borderRadius: 8,
+          border: '1px solid #ffccc7',
+          backgroundColor: '#fff1f0',
+          color: '#a8071a',
+          padding: '8px 12px',
+          fontSize: 13,
+          fontWeight: 600,
+        }}
+      >
+        Выборка недостаточна для надёжной оценки
+      </div>
+    );
   };
 
   const renderChartDescription = (type: string) => {
@@ -242,6 +270,7 @@ export const ResultsChartsPage: React.FC = () => {
 
     return (
       <Card title="Сырое p-значение (мониторинг)" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border, backgroundColor: c.panelBg }}>
+        {renderInsufficientSampleNotice()}
         <ResponsiveContainer width="100%" height={380}>
           <LineChart data={pValueData}>
             <CartesianGrid strokeDasharray="3 3" stroke={c.border} />
@@ -297,8 +326,9 @@ export const ResultsChartsPage: React.FC = () => {
     </Card>
   );
 
-  const renderPowerChart = () => (
+const renderPowerChart = () => (
     <Card title="Статистическая мощность" size="small" style={{ marginBottom: 16, borderRadius: 12, borderColor: c.border, backgroundColor: c.panelBg }}>
+      {renderInsufficientSampleNotice()}
       <ResponsiveContainer width="100%" height={380}>
         <LineChart data={timeSeriesData?.power_over_time || []}>
           <CartesianGrid strokeDasharray="3 3" stroke={c.border} />

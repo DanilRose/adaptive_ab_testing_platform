@@ -48,6 +48,8 @@ const TONE_TO_TAG: Record<ValueTone, string> = {
   default: 'default',
 };
 
+const MIN_SAMPLE_PER_VARIANT_FOR_SIGNIFICANCE = 300;
+
 export const ResultsOverviewPage: React.FC = () => {
   const { timeSeriesData } = useOutletContext<ResultsOutletContext>();
   const { theme } = useTheme();
@@ -105,6 +107,10 @@ export const ResultsOverviewPage: React.FC = () => {
   const nonControlVariants = controlVariant
     ? (timeSeriesData?.variants?.filter((variant) => variant !== controlVariant) ?? [])
     : [];
+  const sampleSizesByVariant = timeSeriesData?.variants?.map((variant) => Number(finalSnapshot?.[variant]?.sample_size ?? 0)) ?? [];
+  const minSampleSizeAcrossVariants = sampleSizesByVariant.length > 0 ? Math.min(...sampleSizesByVariant) : 0;
+  const hasInsufficientSample = minSampleSizeAcrossVariants > 0 && minSampleSizeAcrossVariants < MIN_SAMPLE_PER_VARIANT_FOR_SIGNIFICANCE;
+  const hasSrmIssue = timeSeriesData?.srm_check_passed === false;
   const variantStats: VariantStat[] = nonControlVariants.map((variant) => {
     const snapshot = finalSnapshot?.[variant];
     const mean = snapshot ? Number(snapshot?.mean_metric ?? 0) : null;
@@ -135,9 +141,10 @@ export const ResultsOverviewPage: React.FC = () => {
   const decisionPValueDisplay = decisionPValue !== null && decisionPValue !== undefined
     ? Number(decisionPValue).toFixed(4)
     : 'Н/Д';
-  const isComplete = Number(timeSeriesData?.completion_percentage ?? 0) >= 100 || Boolean(timeSeriesData?.stopped_early);
+  const completionPercentage = Number(timeSeriesData?.completion_percentage ?? 0);
+  const isComplete = completionPercentage >= 100 || Boolean(timeSeriesData?.stopped_early);
+  const hasEnoughProgressForPreliminary = completionPercentage >= 30;
   const allVariantsWorse = bestUpliftValue !== null && bestUpliftValue < 0;
-  const hasPositiveWinner = bestUpliftValue !== null && bestUpliftValue > 0 && decisionPValue !== null && decisionPValue < 0.05;
   const bestUpliftLabel = allVariantsWorse && bestUpliftStat
     ? `Лучший из ухудшений (вариант ${bestUpliftStat.variant})`
     : bestUpliftLabelBase;
@@ -170,11 +177,12 @@ export const ResultsOverviewPage: React.FC = () => {
         : 0;
 
       const significanceSource = variantPValueCorrected ?? variantPValueRaw;
-      const winProbability = (pValue: number | null, uplift: number) => {
+      const winProbability = (pValue: number | null, uplift: number, isBestCurrent: boolean) => {
         if (pValue === null || pValue === undefined) return null;
-        if (uplift <= 0) return 1;
+        if (uplift <= 0) return Math.max(1, Math.round((1 - pValue) * 20));
         if (pValue < 0.05) return 95;
-        return Math.max(2, Math.round((1 - pValue) * 10));
+        if (isBestCurrent) return Math.max(55, Math.min(89, Math.round((1 - pValue) * 100)));
+        return Math.max(25, Math.min(70, Math.round((1 - pValue) * 80)));
       };
 
       const isControl = variant === controlVariant;
@@ -189,10 +197,15 @@ export const ResultsOverviewPage: React.FC = () => {
         cumulative_metric: variantCum.toFixed(2),
         uplift: upliftValue.toFixed(2),
         uplift_value: upliftValue,
-        win_probability: winProbability(significanceSource, upliftValue),
+        win_probability: winProbability(
+          significanceSource,
+          upliftValue,
+          !isControl && maxUpliftValue > 0 && Math.abs(upliftValue - maxUpliftValue) < 0.0001,
+        ),
         p_value_raw: variantPValueRaw !== null && variantPValueRaw !== undefined ? Number(variantPValueRaw).toFixed(4) : 'Н/Д',
         p_value_corrected: variantPValueCorrected !== null && variantPValueCorrected !== undefined ? Number(variantPValueCorrected).toFixed(4) : 'Н/Д',
         significant: significanceSource !== null && significanceSource !== undefined && significanceSource < 0.05,
+        waiting_data: hasInsufficientSample || !hasEnoughProgressForPreliminary,
         is_control: isControl,
         is_best: isBestVariant,
         is_worse: isWorse,
@@ -255,6 +268,9 @@ export const ResultsOverviewPage: React.FC = () => {
         key: 'win_probability',
         render: (value: number | null, record: any) => {
           if (record.is_control) return <Text type="secondary">—</Text>;
+          if (!isComplete && hasEnoughProgressForPreliminary) {
+            return <Text type="secondary">Предварительная оценка</Text>;
+          }
           if (value === null) return <Text type="secondary">Н/Д</Text>;
           return (
             <Text type={value >= 50 ? 'success' : 'danger'} strong>
@@ -286,6 +302,7 @@ export const ResultsOverviewPage: React.FC = () => {
         key: 'significant',
         render: (_: any, record: any) => {
           if (record.is_control) return <Tag color="default">Контроль</Tag>;
+          if (record.waiting_data) return <Tag color="default">Ожидание данных</Tag>;
           if (record.significant && record.uplift_value < 0) {
             return <Tag icon={<CloseCircleOutlined />} color="error">Значимо хуже</Tag>;
           }
@@ -342,10 +359,12 @@ export const ResultsOverviewPage: React.FC = () => {
     return color as ValueTone;
   };
 
-  const correctedWinnerPValue = decisionPValueDisplay;
+  const correctedWinnerPValue = hasInsufficientSample
+    ? '(мало данных)'
+    : decisionPValueDisplay;
 
   const winnerUpliftFromData =
-    typeof timeSeriesData?.winner_uplift_percent === 'number'
+    isComplete && typeof timeSeriesData?.winner_uplift_percent === 'number'
       ? `${timeSeriesData.winner_uplift_percent >= 0 ? '+' : ''}${timeSeriesData.winner_uplift_percent.toFixed(2)}%`
       : null;
 
@@ -355,7 +374,9 @@ export const ResultsOverviewPage: React.FC = () => {
     ? (bestUpliftValue >= 0 ? 'success' : 'danger')
     : 'secondary';
 
-  const pValueTone: ValueTone = decisionPValue !== null && decisionPValue !== undefined
+  const pValueTone: ValueTone = hasInsufficientSample
+    ? 'secondary'
+    : decisionPValue !== null && decisionPValue !== undefined
     ? (decisionPValue < 0.05 ? 'success' : 'danger')
     : 'secondary';
 
@@ -367,9 +388,13 @@ export const ResultsOverviewPage: React.FC = () => {
 
   const guardrailsTone: ValueTone = timeSeriesData?.guardrails?.passed ? 'success' : 'danger';
 
-  const qualityTone: ValueTone = toTone(quality.color);
+  const qualityTone: ValueTone = hasInsufficientSample ? 'danger' : toTone(quality.color);
+  const qualityValue = hasInsufficientSample ? 'Низкая' : quality.label;
 
-  const rolloutTone: ValueTone = timeSeriesData?.rollout_hint ? 'warning' : 'secondary';
+  const hasStatSig = decisionPValue !== null && decisionPValue < 0.05;
+  const pValueForNarrative = decisionPValue !== null
+    ? (decisionPValue < 0.0001 ? 'p < 0.0001' : `p = ${decisionPValue.toFixed(4)}`)
+    : 'p недоступно';
 
   const validitySummary = validity.color === 'success'
     ? 'Валидность анализа: Валиден'
@@ -377,13 +402,19 @@ export const ResultsOverviewPage: React.FC = () => {
       ? 'Валидность анализа: Ограничен (исследовательский режим)'
       : 'Валидность анализа: Невалиден';
 
-  const resultSummary = !isComplete
-    ? 'Результат: Предварительно (идёт набор данных)'
+  const resultSummary = !hasEnoughProgressForPreliminary
+    ? `Результат: Недостаточно данных для предварительного вывода (прогресс ${completionPercentage.toFixed(1)}%, требуется от 30%).`
+    : !isComplete
+    ? `Результат: Предварительный анализ доступен.`
     : decisionPValue !== null && decisionPValue !== undefined
       ? `Результат: ${decisionPValue < 0.05 ? 'Статистически значим' : 'Статистически незначим'} (min p=${decisionPValueDisplay}${minPValueStat?.variant ? `, вариант ${minPValueStat.variant}` : ''})`
       : 'Результат: Недостаточно данных';
 
-  const preCompleteSummary = decisionPValue !== null && decisionPValue !== undefined
+  const preCompleteSummary = !hasEnoughProgressForPreliminary
+    ? `Предварительный вывод недоступен: собрано только ${completionPercentage.toFixed(1)}% данных. Дождитесь минимум 30% объёма теста.`
+    : hasInsufficientSample
+    ? `Предупреждение: Слишком малая выборка. Минимум на вариант: ${MIN_SAMPLE_PER_VARIANT_FOR_SIGNIFICANCE}, сейчас минимум: ${minSampleSizeAcrossVariants}. Для выявления эффекта даже при крупном uplift требуется как минимум 1000-2000 наблюдений на вариант.`
+    : decisionPValue !== null && decisionPValue !== undefined
     ? (decisionPValue < 0.05
       ? (bestUpliftValue !== null && bestUpliftValue < 0
         ? `Предварительно: значимое ухудшение ${bestUpliftDisplay} (min p=${decisionPValueDisplay})`
@@ -399,7 +430,12 @@ export const ResultsOverviewPage: React.FC = () => {
         : `Динамика: Нет отличий от контроля ${controlVariant}`)
     : null;
 
-  const decisionBasis = [validitySummary, resultSummary, dynamicsSummary].filter(Boolean) as string[];
+  const sampleSummary = `Выборка: минимум ${minSampleSizeAcrossVariants} наблюдений на вариант (порог для первичной значимости: ${MIN_SAMPLE_PER_VARIANT_FOR_SIGNIFICANCE}).`;
+  const srmSummary = hasSrmIssue
+    ? 'SRM: обнаружен перекос распределения трафика. Выводы ненадёжны.'
+    : 'SRM: критичного перекоса не обнаружено.';
+
+  const decisionBasis = [validitySummary, resultSummary, sampleSummary, srmSummary, dynamicsSummary].filter(Boolean) as string[];
 
   const recommendationDetailsFallback = () => {
     if (timeSeriesData?.recommendation_status === 'deploy') {
@@ -413,6 +449,27 @@ export const ResultsOverviewPage: React.FC = () => {
   };
 
   const recommendationView = (() => {
+    if (!hasEnoughProgressForPreliminary) {
+      return {
+        label: 'Ожидание данных до 30%',
+        color: 'default',
+        details: preCompleteSummary,
+      };
+    }
+    if (hasInsufficientSample) {
+      return {
+        label: 'Предупреждение: Слишком малая выборка',
+        color: 'error',
+        details: preCompleteSummary,
+      };
+    }
+    if (!isComplete && allVariantsWorse) {
+      return {
+        label: 'Предварительно: лучше оставить контроль',
+        color: 'warning',
+        details: 'На текущих данных все варианты хуже контроля. Продолжайте тест для подтверждения.',
+      };
+    }
     if (!isComplete) {
       return {
         label: 'Предварительный результат',
@@ -424,36 +481,87 @@ export const ResultsOverviewPage: React.FC = () => {
       return {
         label: 'Все варианты хуже контроля',
         color: 'error',
-        details: bestUpliftValue !== null
-          ? `Лучший из альтернатив — ${bestUpliftStat?.variant} (${bestUpliftDisplay}). Рекомендуется оставить контроль.`
-          : 'Рекомендуется оставить контроль.',
+        details: isComplete
+          ? (bestUpliftValue !== null
+            ? `Тест завершён. Все варианты хуже контроля; лучший из альтернатив — вариант ${bestUpliftStat?.variant} (${bestUpliftDisplay}). Рекомендуется оставить контроль без изменений.`
+            : 'Тест завершён. Значимого улучшения нет, рекомендуется оставить контроль без изменений.')
+          : (bestUpliftValue !== null
+            ? `Все наблюдаемые варианты хуже контроля; лучший из альтернатив — вариант ${bestUpliftStat?.variant} (${bestUpliftDisplay}). Предварительно рекомендуется оставить контроль.`
+            : 'Предварительно рекомендуется оставить контроль.'),
+      };
+    }
+    if (!isComplete && bestUpliftValue !== null && bestUpliftValue > 0 && decisionPValue !== null && decisionPValue >= 0.05) {
+      return {
+        label: 'Есть лидер, статистика пока не подтверждена',
+        color: 'warning',
+        details: `Предварительно лидирует вариант ${bestUpliftStat?.variant} с приростом ${bestUpliftDisplay}, но пока ${pValueForNarrative}. Продолжайте тест до завершения для финального решения.`,
       };
     }
     if (decisionPValue !== null && decisionPValue >= 0.05) {
       return {
         label: 'Нет статистически значимых различий',
         color: 'default',
-        details: `Различия не подтверждены (min p=${decisionPValueDisplay}${minPValueStat?.variant ? `, вариант ${minPValueStat.variant}` : ''}).`,
+        details: isComplete
+          ? `Тест завершён. Различия не подтверждены статистически (${pValueForNarrative}${minPValueStat?.variant ? `, лучший сигнал у варианта ${minPValueStat.variant}` : ''}). Внедрение изменений не рекомендуется.`
+          : `Различия пока не подтверждены статистически (${pValueForNarrative}${minPValueStat?.variant ? `, лучший сигнал у варианта ${minPValueStat.variant}` : ''}). Продолжайте набор данных.`,
       };
     }
     if (decisionPValue !== null && decisionPValue < 0.05 && bestUpliftValue !== null && bestUpliftValue > 0) {
       return {
         label: 'Есть статистически значимый рост',
         color: 'success',
-        details: `Зафиксирован рост на ${bestUpliftDisplay} при min p=${decisionPValueDisplay}.`,
+        details: isComplete
+          ? `Тест завершён. Вариант ${bestUpliftStat?.variant} показал статистически значимый прирост ${bestUpliftDisplay} (${pValueForNarrative}). Рекомендуется внедрить вариант ${bestUpliftStat?.variant} на 100% аудитории.`
+          : `Предварительный сигнал: вариант ${bestUpliftStat?.variant} показывает рост ${bestUpliftDisplay} (${pValueForNarrative}). Подтвердите эффект к завершению теста.`,
       };
     }
     return { ...recommendationFallback, details: recommendationDetailsFallback() };
   })();
 
-  const shouldFallbackWinnerToControl = isComplete && bestUpliftValue !== null && bestUpliftValue <= 0 && !!controlVariant;
+  const recommendationDetailsWithChecks = [
+    recommendationView.details,
+    hasSrmIssue
+      ? ' Обнаружен перекос в распределении трафика (SRM). Продолжите сбор данных до выравнивания долей вариантов.'
+      : null,
+  ].filter(Boolean).join(' ');
+
+  const hasFinalWinner = isComplete && decisionPValue !== null && decisionPValue < 0.05 && bestUpliftValue !== null && bestUpliftValue > 0;
+  const shouldFallbackWinnerToControl = !isComplete && hasEnoughProgressForPreliminary && bestUpliftValue !== null && bestUpliftValue <= 0 && !!controlVariant;
   const resolvedWinnerVariant = isComplete
-    ? (hasPositiveWinner ? bestUpliftStat?.variant ?? null : (shouldFallbackWinnerToControl ? controlVariant : null))
-    : null;
-  const resolvedWinnerLabel = resolvedWinnerVariant
-    ? (shouldFallbackWinnerToControl ? `Контроль (Вариант ${controlVariant})` : `Вариант ${resolvedWinnerVariant}`)
-    : (isComplete ? 'Победитель не определён' : 'Победитель: предварительно');
-  const resolvedWinnerUplift = resolvedWinnerVariant ? winnerUplift : null;
+    ? (hasFinalWinner ? bestUpliftStat?.variant ?? null : null)
+    : (hasEnoughProgressForPreliminary
+      ? (bestUpliftValue !== null && bestUpliftValue > 0 ? bestUpliftStat?.variant ?? null : (shouldFallbackWinnerToControl ? controlVariant : null))
+      : null);
+  const resolvedWinnerLabel = isComplete
+    ? (hasFinalWinner ? `Победитель: вариант ${resolvedWinnerVariant}` : 'Победителя нет')
+    : resolvedWinnerVariant
+      ? (shouldFallbackWinnerToControl
+        ? `Предварительно: оставить контроль (вариант ${controlVariant})`
+        : (bestUpliftValue !== null && bestUpliftValue < 5
+          ? `Вариант ${resolvedWinnerVariant} выигрывает с минимальным отрывом. Рекомендуется оставить контрольный вариант.`
+          : `Предварительный победитель: вариант ${resolvedWinnerVariant}`))
+      : (hasEnoughProgressForPreliminary
+        ? 'Предварительный победитель не определён'
+        : `Предварительный победитель недоступен: прогресс ${completionPercentage.toFixed(1)}% из требуемых 30%`);
+  const showControlFallback = Boolean(shouldFallbackWinnerToControl);
+  const resolvedWinnerUplift = resolvedWinnerVariant && !showControlFallback ? winnerUplift : null;
+  const winnerTagColor = isComplete && !hasFinalWinner
+    ? 'warning'
+    : showControlFallback
+      ? 'warning'
+      : 'success';
+
+  const rolloutHintValue = (() => {
+    if (!hasEnoughProgressForPreliminary || !isComplete) {
+      return 'Подождать завершения';
+    }
+    if (hasFinalWinner && bestUpliftStat?.variant) {
+      return `Раскатать вариант ${bestUpliftStat.variant} на 100%`;
+    }
+    return 'Оставить контроль (изменения не нужны)';
+  })();
+
+  const rolloutTone: ValueTone = hasFinalWinner ? 'success' : (isComplete ? 'warning' : 'secondary');
 
   return (
     <div style={{ color: c.textPrimary }}>
@@ -477,13 +585,13 @@ export const ResultsOverviewPage: React.FC = () => {
                 <Text type="secondary" style={{ fontSize: 12 }}>Победитель</Text>
                 {resolvedWinnerVariant ? (
                   <Space align="center" wrap>
-                    <Tag color="success" style={{ fontSize: 15, padding: '4px 12px' }}>{resolvedWinnerLabel}</Tag>
+                    <Tag color={winnerTagColor} style={{ fontSize: 15, padding: '4px 12px' }}>{resolvedWinnerLabel}</Tag>
                     {resolvedWinnerUplift && (
                       <Text strong style={{ fontSize: 24, color: c.textPrimary }}>{resolvedWinnerUplift}</Text>
                     )}
                   </Space>
                 ) : (
-                  <Tag color="default">{resolvedWinnerLabel}</Tag>
+                  <Tag color={isComplete ? 'warning' : 'default'}>{resolvedWinnerLabel}</Tag>
                 )}
               </Space>
             </Col>
@@ -494,7 +602,7 @@ export const ResultsOverviewPage: React.FC = () => {
                 <Tag color={recommendationView.color} icon={<RocketOutlined />} style={{ width: 'fit-content', fontSize: 14, padding: '4px 12px' }}>
                   {recommendationView.label}
                 </Tag>
-                <Text style={{ color: c.textMuted }}>{recommendationView.details}</Text>
+                <Text style={{ color: c.textMuted }}>{recommendationDetailsWithChecks}</Text>
               </Space>
             </Col>
           </Row>
@@ -560,12 +668,12 @@ export const ResultsOverviewPage: React.FC = () => {
             <Space direction="vertical" size={8} style={{ width: '100%' }}>
               <MetricRow
                 label="Оценка качества данных"
-                value={quality.label}
+                value={qualityValue}
                 valueTone={qualityTone}
               />
               <MetricRow
                 label="Подсказка по раскатке"
-                value={timeSeriesData?.rollout_hint || 'Не задана'}
+                value={rolloutHintValue}
                 valueTone={rolloutTone}
               />
             </Space>
