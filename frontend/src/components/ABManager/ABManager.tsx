@@ -473,6 +473,12 @@ export const ABManager: React.FC = () => {
     return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(safeValue);
   };
 
+  const getAnalysisModeLabel = (mode?: string) => {
+    if (mode === 'adaptive_bandit') return 'Адаптивный';
+    if (mode === 'fixed_experiment') return 'Фиксированный';
+    return mode || '—';
+  };
+
   // Render helpers
   const renderStatCard = (title: string, value: number, tone?: { bg: string; text: string; border: string }) => (
     <StatCard title={title} value={String(value)} c={c} tone={tone} />
@@ -909,7 +915,7 @@ export const ABManager: React.FC = () => {
                 <div style={{ fontSize: 13, color: c.textMuted }}>Название: <span style={{ color: c.textPrimary, fontWeight: 600 }}>{formData.testName?.trim() || '—'}</span></div>
                 <div style={{ fontSize: 13, color: c.textMuted }}>Варианты: <span style={{ color: c.textPrimary, fontWeight: 600 }}>{String(formData.variants || '').split(',').map((x: string) => x.trim()).filter(Boolean).length || 0}</span></div>
                 <div style={{ fontSize: 13, color: c.textMuted }}>Метрика: <span style={{ color: c.textPrimary, fontWeight: 600 }}>{formData.primaryMetric?.trim() || '—'}</span></div>
-                <div style={{ fontSize: 13, color: c.textMuted }}>Режим: <span style={{ color: c.textPrimary, fontWeight: 600 }}>{formData.analysisMode || 'fixed_experiment'}</span></div>
+                <div style={{ fontSize: 13, color: c.textMuted }}>Режим: <span style={{ color: c.textPrimary, fontWeight: 600 }}>{getAnalysisModeLabel(formData.analysisMode || 'fixed_experiment')}</span></div>
               </div>
             </div>
 
@@ -922,12 +928,12 @@ export const ABManager: React.FC = () => {
             }}>
               <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.35px', color: c.textSub, marginBottom: 10 }}>Рекомендации</div>
               <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: c.textMuted, lineHeight: 1.6 }}>
-                <li>Первый вариант (A) используйте как контрольный</li>
-                <li>Для валидных выводов выбирайте <strong>Фиксированный эксперимент</strong></li>
-                <li>Перед созданием теста проверьте наличие <strong>верного</strong> GAN-датасета</li>
+                <li>Вариант <strong>A</strong> используйте как контрольный, остальные - как экспериментальные.</li>
+                <li>Для выявления потенциальной прибыли внедряемой доработки, используйте <strong>фиксированный эксперимент</strong>.</li>
+                <li>Проверьте, что выбран нужный <strong>датасет</strong> и в нём есть целевая метрика.</li>
               </ul>
             </div>
-          </div>
+          </div>  
         </div>
       )}
 
@@ -1472,7 +1478,7 @@ const CreateTestForm: React.FC<CreateTestFormProps> = ({ formData, setFormData, 
           </div>
 
           <div>
-            <label style={labelStyle}>Режим анализа</label>
+            <label style={labelStyle}>Режим A/B теста</label>
             <select
               value={formData.analysisMode || 'fixed_experiment'}
               onChange={e => setFormData(prev => ({ ...prev, analysisMode: e.target.value }))}
@@ -1480,8 +1486,8 @@ const CreateTestForm: React.FC<CreateTestFormProps> = ({ formData, setFormData, 
               onBlur={() => setFocused(null)}
               style={inputStyle(focused === 'analysisMode')}
             >
-              <option value="fixed_experiment">Фиксированный эксперимент (валидные выводы)</option>
-              <option value="adaptive_bandit">Адаптивный бандит (исследовательский режим)</option>
+              <option value="fixed_experiment">Фиксированный режим</option>
+              <option value="adaptive_bandit">Адаптивный режим</option>
             </select>
           </div>
         </div>

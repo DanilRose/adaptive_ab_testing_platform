@@ -746,6 +746,12 @@ export const ResultsPage: React.FC = () => {
     high: { label: 'Высокая', color: 'green' },
   };
 
+  const getAnalysisModeLabel = (mode?: string) => {
+    if (mode === 'adaptive_bandit') return 'Адаптивный';
+    if (mode === 'fixed_experiment') return 'Фиксированный';
+    return mode || '—';
+  };
+
   const formatEarlyStopReason = (reason: string | null): string => {
     if (!reason) return 'не указана';
 
@@ -1067,7 +1073,7 @@ export const ResultsPage: React.FC = () => {
               description={
                 <Space direction="vertical" size={2}>
                   <Text>Скорректированное p-значение (метод Холма): {timeSeriesData.winner ? (timeSeriesData.p_values_corrected_latest?.[timeSeriesData.winner]?.toFixed(4) ?? 'Н/Д') : 'Н/Д'}</Text>
-                  <Text>Режим анализа: {timeSeriesData.analysis_mode || 'fixed_experiment'}</Text>
+                  <Text>Режим A/B теста: {getAnalysisModeLabel(timeSeriesData.analysis_mode || 'fixed_experiment')}</Text>
                 </Space>
               }
             />

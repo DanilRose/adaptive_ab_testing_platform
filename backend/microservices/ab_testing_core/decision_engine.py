@@ -25,6 +25,14 @@ class GuardrailCheck:
     passed: bool
 
 
+@dataclass
+class DecisionPolicyResult:
+    allowed: bool
+    status: str
+    reasons: List[str]
+    checks: Dict[str, Any]
+
+
 class ABDecisionEngine:
     """Единый движок принятия решений для A/B тестов."""
 
@@ -122,6 +130,51 @@ class ABDecisionEngine:
         }
 
     @staticmethod
+    def evaluate_decision_policy(
+        *,
+        analysis_validity: str,
+        srm_passed: Optional[bool],
+        guardrails_passed: bool,
+        corrected_p_values: Dict[str, float],
+        power: Optional[float],
+        alpha: float,
+    ) -> DecisionPolicyResult:
+        reasons: List[str] = []
+        checks: Dict[str, Any] = {}
+
+        valid_design = analysis_validity == "valid_for_inference"
+        checks["valid_design"] = valid_design
+        if not valid_design:
+            reasons.append("Невалидный дизайн эксперимента для итогового вывода")
+
+        srm_ok = (srm_passed is True) if srm_passed is not None else False
+        checks["srm_passed"] = srm_ok
+        if srm_passed is None:
+            reasons.append("SRM не проверен")
+        elif not srm_ok:
+            reasons.append("SRM не пройден")
+
+        checks["guardrails_passed"] = bool(guardrails_passed)
+        if not guardrails_passed:
+            reasons.append("Guardrails нарушены")
+
+        p_ok = any(float(p) < float(alpha) for p in corrected_p_values.values()) if corrected_p_values else False
+        checks["corrected_p_below_alpha"] = p_ok
+        if not p_ok:
+            reasons.append("Нет статистически значимых различий по скорректированным p-value")
+
+        power_ok = power is not None and float(power) >= 0.8
+        checks["power_ok"] = power_ok
+        if power is None:
+            reasons.append("Power не рассчитан")
+        elif not power_ok:
+            reasons.append("Недостаточная статистическая мощность (< 0.8)")
+
+        allowed = all([valid_design, srm_ok, guardrails_passed, p_ok, power_ok])
+        status = "deploy" if allowed else "hold"
+        return DecisionPolicyResult(allowed=allowed, status=status, reasons=reasons, checks=checks)
+
+    @staticmethod
     def build_decision_summary(
         *,
         results: Dict[str, Any],
@@ -151,7 +204,7 @@ class ABDecisionEngine:
         control_mean = float(control_result.mean)
 
         significant_variants: List[str] = []
-        best_variant = control_variant
+        best_variant: Optional[str] = control_variant
         best_uplift = 0.0
         variant_cards: List[VariantDecision] = []
 
@@ -182,6 +235,9 @@ class ABDecisionEngine:
             )
 
         if analysis_validity != "valid_for_inference":
+            best_variant = None
+            best_uplift = 0.0
+            significant_variants = []
             recommended_action = "Использовать только как исследовательский сигнал; финальный fixed A/B обязателен"
             confidence = "low"
         elif guardrails_status.get("enabled") and not guardrails_status.get("passed", True):

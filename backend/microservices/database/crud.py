@@ -486,6 +486,21 @@ def get_ab_test_time_series(
     )
 
 
+async def async_get_ab_test_time_series(
+    db: AsyncSession,
+    test_id: str,
+    limit: int = 5000,
+) -> list[ABTestTimeSeriesORM]:
+
+    result = await db.execute(
+        select(ABTestTimeSeriesORM)
+        .where(ABTestTimeSeriesORM.test_id == test_id)
+        .order_by(ABTestTimeSeriesORM.users_processed)
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
 async def async_create_ab_test_time_series(
     db: AsyncSession,
     *,
@@ -671,7 +686,7 @@ def seed_default_templates(db: Session) -> int:
             created_by="system",
             config_json={
                 "epochs": 90,
-                "real_data_samples": 120000,
+                "real_data_samples": 100000,
                 "save_checkpoint": True,
                 "checkpoint_name": "gan_high_fidelity",
                 "LATENT_DIM": 256,
@@ -948,7 +963,7 @@ def seed_default_templates(db: Session) -> int:
                 "trafficSplitType": "fixed",
                 "analysisMode": "fixed_experiment",
                 "simulationDurationMinutes": 25,
-                "variantEffects": {"B": {"conversion": 1.10}},
+                "variantEffects": {"B": {"conversion": 1.04}},
                 "earlyStoppingEnabled": False,
                 "early_stopping_enabled": False,
             },
@@ -972,10 +987,6 @@ def seed_default_templates(db: Session) -> int:
                 "trafficSplitType": "fixed",
                 "analysisMode": "fixed_experiment",
                 "simulationDurationMinutes": 30,
-                "variantEffects": {
-                    "B": {"conversion": 1.07},
-                    "C": {"conversion": 1.13},
-                },
                 "earlyStoppingEnabled": False,
                 "early_stopping_enabled": False,
             },
@@ -1000,64 +1011,12 @@ def seed_default_templates(db: Session) -> int:
                 "analysisMode": "fixed_experiment",
                 "simulationDurationMinutes": 35,
                 "variantEffects": {
-                    "B": {"ctr": 1.05},
-                    "C": {"ctr": 1.09},
-                    "D": {"ctr": 1.12},
+                    "B": {"ctr": 1.01},
+                    "C": {"ctr": 1.02},
+                    "D": {"ctr": 1.07},
                 },
                 "earlyStoppingEnabled": False,
                 "early_stopping_enabled": False,
-            },
-        ),
-        TemplateORM(
-            name="A/B — Фиксированный тест выручки с защитными ограничениями",
-            description="Фиксированный тест выручки + защитные ограничения по задержке и доле ошибок для безопасного релиза.",
-            template_type="ab_test",
-            tags=["ab", "revenue", "guardrails"],
-            created_by="system",
-            config_json={
-                "testName": "AB Выручка с защитными ограничениями",
-                "variants": "A, B",
-                "primaryMetric": "revenue",
-                "metricType": "continuous",
-                "description": "Monetization гипотеза с защитными метриками",
-                "confidenceLevel": 0.95,
-                "power": 0.85,
-                "minEffectSize": 0.05,
-                "sampleSize": 24000,
-                "trafficSplitType": "fixed",
-                "analysisMode": "fixed_experiment",
-                "simulationDurationMinutes": 40,
-                "variantEffects": {"B": {"revenue": 1.08}},
-                "guardrailsConfig": {
-                    "latency_ms": {"threshold": 5, "direction": "max_increase"},
-                    "error_rate": {"threshold": 0.01, "direction": "max_increase"}
-                },
-                "earlyStoppingEnabled": False,
-                "early_stopping_enabled": False,
-            },
-        ),
-        TemplateORM(
-            name="A/B — Успех с ранней остановкой",
-            description="Фиксированный A/B-тест с включённой ранней остановкой для быстрого завершения при выраженном приросте.",
-            template_type="ab_test",
-            tags=["ab", "early-stop", "success",],
-            created_by="system",
-            config_json={
-                "testName": "AB Ранняя остановка при успехе",
-                "variants": "A, B",
-                "primaryMetric": "conversion",
-                "metricType": "binary",
-                "description": "Сценарий с ранней остановкой по успеху",
-                "confidenceLevel": 0.95,
-                "power": 0.8,
-                "minEffectSize": 0.06,
-                "sampleSize": 18000,
-                "trafficSplitType": "fixed",
-                "analysisMode": "fixed_experiment",
-                "simulationDurationMinutes": 30,
-                "variantEffects": {"B": {"conversion": 1.18}},
-                "earlyStoppingEnabled": True,
-                "early_stopping_enabled": True,
             },
         ),
         TemplateORM(
@@ -1079,10 +1038,6 @@ def seed_default_templates(db: Session) -> int:
                 "trafficSplitType": "adaptive",
                 "analysisMode": "adaptive_bandit",
                 "simulationDurationMinutes": 25,
-                "variantEffects": {
-                    "B": {"ctr": 1.06},
-                    "C": {"ctr": 1.14},
-                },
                 "earlyStoppingEnabled": False,
                 "early_stopping_enabled": False,
             },
@@ -1106,42 +1061,8 @@ def seed_default_templates(db: Session) -> int:
                 "trafficSplitType": "adaptive",
                 "analysisMode": "adaptive_bandit",
                 "simulationDurationMinutes": 45,
-                "variantEffects": {
-                    "B": {"conversion": 1.03},
-                    "C": {"conversion": 1.05},
-                    "D": {"conversion": 1.10},
-                    "E": {"conversion": 1.07},
-                },
                 "earlyStoppingEnabled": False,
                 "early_stopping_enabled": False,
-            },
-        ),
-        TemplateORM(
-            name="A/B — Контрольная группа + ранняя остановка + защитные ограничения",
-            description="Полный сценарий: фиксированный статистический вывод, логика контрольной группы через прирост B, ранняя остановка и защитные ограничения.",
-            template_type="ab_test",
-            tags=["ab", "full-flow", "early-stop", "guardrails"],
-            created_by="system",
-            config_json={
-                "testName": "AB Полный сценарий",
-                "variants": "A, B",
-                "primaryMetric": "revenue",
-                "metricType": "continuous",
-                "description": "Полнофункциональный шаблон для промышленного сценария",
-                "confidenceLevel": 0.95,
-                "power": 0.9,
-                "minEffectSize": 0.04,
-                "sampleSize": 28000,
-                "trafficSplitType": "fixed",
-                "analysisMode": "fixed_experiment",
-                "simulationDurationMinutes": 50,
-                "variantEffects": {"B": {"revenue": 1.09, "conversion": 1.03}},
-                "guardrailsConfig": {
-                    "latency_ms": {"threshold": 3, "direction": "max_increase"},
-                    "error_rate": {"threshold": 0.005, "direction": "max_increase"}
-                },
-                "earlyStoppingEnabled": True,
-                "early_stopping_enabled": True,
             },
         ),
     ]

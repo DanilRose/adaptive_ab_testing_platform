@@ -191,6 +191,12 @@ export interface TimeSeriesResponse {
       known?: boolean;
     }>;
   };
+  decision_policy?: {
+    allowed: boolean;
+    status: 'deploy' | 'hold';
+    reasons: string[];
+    checks: Record<string, unknown>;
+  } | null;
   recommendation_status?: 'deploy' | 'do_not_deploy' | 'need_more_data';
   recommendation_reason?: string[];
   rollout_hint?: string;

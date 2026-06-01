@@ -2,12 +2,13 @@ import pandas as pd
 import numpy as np
 from scipy import stats
 from scipy.linalg import sqrtm
+from scipy.stats import wasserstein_distance
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
-import math 
+import math
 
 warnings.filterwarnings('ignore')
 
@@ -61,7 +62,8 @@ class GANEvaluator:
         
         diversity_score = self._calculate_diversity()
         fid_score = self.calculate_fid_score()
-        
+        wasserstein_result = self.calculate_wasserstein_distances()
+
         if fid_score is not None:
             print(f"FID: {fid_score:.2f}")
         else:
@@ -71,7 +73,13 @@ class GANEvaluator:
             print(f"KS среднее: {ks_mean_raw:.4f}")
         if corr_diff is not None:
             print(f"Разница корреляций: {corr_diff:.4f}")
-        
+        mean_wd = wasserstein_result.get("mean_wd")
+        if mean_wd is not None:
+            print(f"Wasserstein Distance (среднее): {mean_wd:.4f}")
+        wd_quality = wasserstein_result.get("quality_score")
+        if wd_quality is not None:
+            print(f"WD Quality Score: {wd_quality:.4f}")
+
         for feature in list(stats_results.keys())[:3]:
             real_mean = stats_results[feature]['mean_real']
             synth_mean = stats_results[feature]['mean_synth']
@@ -80,12 +88,13 @@ class GANEvaluator:
             else:
                 diff_pct = 0.0
             print(f"{feature}: {real_mean} → {synth_mean} (Δ {diff_pct:.1f}%)")
-        
+
         return {
             'statistical_tests': stats_results,
             'correlation_difference': corr_diff,
             'diversity_score': sanitize_float(diversity_score),
-            'fid_score': fid_score
+            'fid_score': fid_score,
+            'wasserstein': wasserstein_result,
         }
 
     def _calculate_diversity(self):
@@ -104,6 +113,89 @@ class GANEvaluator:
         diversity = x_range * y_range
         
         return float(diversity) if not (math.isnan(float(diversity)) or math.isinf(float(diversity))) else 0.0
+
+    def calculate_wasserstein_distances(self) -> dict:
+        """
+        Вычисляет Wasserstein Distance (Earth Mover's Distance) между
+        реальными и синтетическими распределениями для каждого числового признака.
+
+        Wasserstein Distance — стандартная метрика качества GAN:
+        - WD = 0: распределения идентичны
+        - Чем меньше WD, тем лучше GAN воспроизводит реальные данные
+        - Устойчива к выбросам и не требует одинакового числа наблюдений
+
+        Returns:
+            dict с полями:
+                wasserstein_distances: {feature: distance}
+                mean_wd: среднее WD по всем признакам
+                max_wd: максимальное WD (наиболее проблемный признак)
+                min_wd: минимальное WD (лучше всего воспроизведённый признак)
+                quality_score: нормализованная оценка [0, 1] (1 = идеально)
+        """
+        real_numerical  = self.real_data.select_dtypes(include=[np.number])
+        synth_numerical = self.synthetic_data.select_dtypes(include=[np.number])
+
+        common_columns = [
+            col for col in real_numerical.columns
+            if col in synth_numerical.columns
+        ]
+
+        if not common_columns:
+            return {
+                "wasserstein_distances": {},
+                "mean_wd": None,
+                "max_wd": None,
+                "min_wd": None,
+                "quality_score": None,
+                "error": "No common numerical columns found",
+            }
+
+        distances: dict = {}
+        for col in common_columns:
+            real_vals  = real_numerical[col].dropna().values
+            synth_vals = synth_numerical[col].dropna().values
+
+            if len(real_vals) == 0 or len(synth_vals) == 0:
+                continue
+
+            try:
+                wd = wasserstein_distance(real_vals, synth_vals)
+                distances[col] = sanitize_float(float(wd))
+            except Exception:
+                pass
+
+        if not distances:
+            return {
+                "wasserstein_distances": {},
+                "mean_wd": None,
+                "max_wd": None,
+                "min_wd": None,
+                "quality_score": None,
+            }
+
+        wd_values = [v for v in distances.values() if v is not None]
+        mean_wd = float(np.mean(wd_values))
+        max_wd  = float(np.max(wd_values))
+        min_wd  = float(np.min(wd_values))
+
+        # Нормализованная оценка качества: используем экспоненциальное затухание.
+        # При mean_wd = 0 → quality_score = 1.0 (идеально).
+        # При mean_wd = 1 → quality_score ≈ 0.37.
+        # Масштаб нормировки зависит от диапазона данных; используем медиану std реальных данных.
+        real_stds = real_numerical[list(distances.keys())].std().dropna()
+        scale = float(real_stds.median()) if len(real_stds) > 0 and real_stds.median() > 0 else 1.0
+        quality_score = float(np.exp(-mean_wd / scale))
+        quality_score = sanitize_float(min(1.0, max(0.0, quality_score)))
+
+        return {
+            "wasserstein_distances": distances,
+            "mean_wd": sanitize_float(mean_wd),
+            "max_wd": sanitize_float(max_wd),
+            "min_wd": sanitize_float(min_wd),
+            "quality_score": quality_score,
+            "worst_feature": max(distances, key=lambda k: distances[k] or 0),
+            "best_feature":  min(distances, key=lambda k: distances[k] or float("inf")),
+        }
 
     def calculate_fid_score(self):
         try:

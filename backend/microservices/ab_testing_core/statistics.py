@@ -258,6 +258,18 @@ class StatisticalAnalyzer:
         high = float(np.quantile(diffs, 1.0 - alpha_tail))
         return low, high
 
+    @staticmethod
+    def _fdr_bh_correction(p_value: float, rank: int, total: int) -> float:
+        """
+        Benjamini-Hochberg FDR correction для одного p-value.
+        rank  — позиция p-value в отсортированном списке (1-based).
+        total — общее число сравнений.
+        Формула: p_adj = p * total / rank, ограниченная [0, 1].
+        """
+        if total <= 0 or rank <= 0:
+            return min(float(p_value), 1.0)
+        return min(float(p_value) * total / rank, 1.0)
+
     def analyze_continuous_metric(
         self,
         control: np.ndarray,
@@ -267,38 +279,51 @@ class StatisticalAnalyzer:
     ) -> StatisticalTestResult:
         # Welch's t-test (более robust чем обычный t-test)
         t_stat, p_value = stats.ttest_ind(treatment, control, equal_var=False)
-        
+
         # Multiple comparisons correction
         if correction_method == "bonferroni":
-            p_value_corrected = min(p_value * num_comparisons, 1.0)
-        else:  # FDR (менее консервативный)
-            p_value_corrected = p_value * num_comparisons / 1.5  # Упрощенная версия
-        
+            p_value_corrected = min(float(p_value) * max(1, int(num_comparisons)), 1.0)
+        elif correction_method == "fdr_bh":
+            # Benjamini-Hochberg: при одном сравнении rank=1, total=num_comparisons
+            p_value_corrected = self._fdr_bh_correction(p_value, rank=1, total=max(1, int(num_comparisons)))
+        else:
+            # Holm-Bonferroni (консервативнее BH, мягче Bonferroni)
+            p_value_corrected = min(float(p_value) * max(1, int(num_comparisons)), 1.0)
+
         # Effect size (Cohen's d)
         pooled_std = np.sqrt((np.var(control, ddof=1) + np.var(treatment, ddof=1)) / 2)
         if pooled_std == 0:
             cohens_d = 0.0
         else:
             cohens_d = (np.mean(treatment) - np.mean(control)) / pooled_std
-        
-        # Standard error
-        se = pooled_std * np.sqrt(1/len(control) + 1/len(treatment))
-        
-        # Confidence interval (95%)
+
+        # Standard error (Welch)
+        se = np.sqrt(
+            np.var(control, ddof=1) / len(control)
+            + np.var(treatment, ddof=1) / len(treatment)
+        )
+
+        # Confidence interval через t-распределение (Welch–Satterthwaite df)
         diff = np.mean(treatment) - np.mean(control)
-        ci_margin = 1.96 * se
-        ci_lower = diff - ci_margin
-        ci_upper = diff + ci_margin
-        
+        var_c = np.var(control, ddof=1) / len(control)
+        var_t = np.var(treatment, ddof=1) / len(treatment)
+        welch_df = (var_c + var_t) ** 2 / (
+            var_c ** 2 / max(1, len(control) - 1)
+            + var_t ** 2 / max(1, len(treatment) - 1)
+        )
+        t_crit = stats.t.ppf(1 - self.alpha / 2, df=max(1.0, welch_df))
+        ci_lower = diff - t_crit * se
+        ci_upper = diff + t_crit * se
+
         # Relative uplift
         if np.mean(control) != 0:
             relative_uplift = (np.mean(treatment) - np.mean(control)) / np.mean(control) * 100
         else:
             relative_uplift = 0.0
-        
+
         # Значимость с учетом коррекции
         significant = p_value_corrected < self.alpha
-        
+
         return StatisticalTestResult(
             t_statistic=float(t_stat),
             p_value=float(p_value),

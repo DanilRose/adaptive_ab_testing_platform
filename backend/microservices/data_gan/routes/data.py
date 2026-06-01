@@ -22,6 +22,7 @@ from backend.microservices.data_gan import (
 from backend.microservices.shared import SimpleTTLCache
 from backend.microservices.services.gan_integration import gan_service
 from backend.microservices.services.traffic_generator.data_generator import RealisticDataGenerator
+from backend.microservices.services.evaluator import GANEvaluator
 
 platform = ABPlatformProvider.get()
 
@@ -186,6 +187,21 @@ async def generate_synthetic_data(
             "synthetic_preview": synthetic_data.head(10).to_dict("records"),
         }
 
+        # ── Wasserstein Distance: оценка качества синтетики ──────────────────
+        # Генерируем небольшую реальную выборку для сравнения распределений.
+        # Используем run_in_threadpool, чтобы не блокировать event loop.
+        try:
+            real_sample = await run_in_threadpool(
+                data_generator.generate_dataset,
+                min(5000, len(synthetic_data)),
+            )
+            evaluator = GANEvaluator(real_data=real_sample, synthetic_data=synthetic_data)
+            wasserstein_result = await run_in_threadpool(evaluator.calculate_wasserstein_distances)
+            result["wasserstein_quality"] = wasserstein_result
+        except Exception as _wd_err:
+            # Ошибка оценки не должна блокировать сохранение датасета
+            result["wasserstein_quality"] = {"error": str(_wd_err)}
+
         DatasetPersistenceService.persist_dataset(
             db=db,
             data_type="synthetic",
@@ -193,7 +209,7 @@ async def generate_synthetic_data(
             generated_by=current_user.username,
             dataset_name=request.dataset_name,
         )
-        
+
         # Инвалидируем кэш
         _status_cache.invalidate_prefix("generated_history_")
         _status_cache.invalidate("dataset_stats")

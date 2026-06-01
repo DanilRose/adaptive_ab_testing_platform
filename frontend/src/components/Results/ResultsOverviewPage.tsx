@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
-import { Col, Row, Space, Table, Tag, Typography } from 'antd';
-import { CheckCircleOutlined, RocketOutlined, WarningOutlined } from '@ant-design/icons';
+import { Col, Row, Space, Table, Tag, Tooltip, Typography } from 'antd';
+import { CheckCircleOutlined, CloseCircleOutlined, RocketOutlined } from '@ant-design/icons';
 import { useOutletContext } from 'react-router-dom';
 import { useTheme } from '@/context/ThemeContext';
 import type { ResultsOutletContext } from './ResultsSectionPage';
@@ -33,6 +33,12 @@ const qualityLabel: Record<string, { label: string; color: string }> = {
 };
 
 type ValueTone = 'success' | 'warning' | 'danger' | 'secondary' | 'default';
+
+type VariantStat = {
+  variant: string;
+  uplift: number | null;
+  pValue: number | null;
+};
 
 const TONE_TO_TAG: Record<ValueTone, string> = {
   success: 'success',
@@ -91,15 +97,66 @@ export const ResultsOverviewPage: React.FC = () => {
     return variantColors[variant] || '#722ed1';
   };
 
-  const renderResultsTable = () => {
-    if (!timeSeriesData || chartData.length === 0) return null;
+  const finalSnapshot = chartData.length > 0 ? chartData[chartData.length - 1] : null;
+  const controlVariant = timeSeriesData?.variants?.[0];
+  const controlMetric = controlVariant && finalSnapshot
+    ? Number(finalSnapshot?.[controlVariant]?.mean_metric ?? 0)
+    : 0;
+  const nonControlVariants = controlVariant
+    ? (timeSeriesData?.variants?.filter((variant) => variant !== controlVariant) ?? [])
+    : [];
+  const variantStats: VariantStat[] = nonControlVariants.map((variant) => {
+    const snapshot = finalSnapshot?.[variant];
+    const mean = snapshot ? Number(snapshot?.mean_metric ?? 0) : null;
+    const uplift = mean !== null && controlMetric > 0
+      ? ((mean - controlMetric) / controlMetric * 100)
+      : null;
+    const pValue = timeSeriesData?.p_values_corrected_latest?.[variant] ?? snapshot?.p_value ?? null;
+    return { variant, uplift, pValue };
+  }).filter((stat) => stat.uplift !== null);
 
-    const finalData = chartData[chartData.length - 1];
-    const controlVariant = timeSeriesData.variants[0];
-    const controlMetric = finalData?.[controlVariant]?.mean_metric || 0;
+  const bestUpliftStat = variantStats.length > 0
+    ? variantStats.reduce((best, current) => (current.uplift! > best.uplift! ? current : best), variantStats[0])
+    : null;
+  const bestUpliftValue = bestUpliftStat?.uplift ?? null;
+  const bestUpliftDisplay = bestUpliftValue !== null
+    ? `${bestUpliftValue >= 0 ? '+' : ''}${bestUpliftValue.toFixed(2)}%`
+    : 'Н/Д';
+  const bestUpliftLabelBase = bestUpliftStat
+    ? `Лучший прирост к контролю (вариант ${bestUpliftStat.variant})`
+    : 'Лучший прирост к контролю';
+
+  const minPValueStat = variantStats.reduce<VariantStat | null>((best, current) => {
+    if (current.pValue === null || current.pValue === undefined) return best;
+    if (!best || best.pValue === null || best.pValue === undefined || current.pValue < best.pValue) return current;
+    return best;
+  }, null);
+  const decisionPValue = minPValueStat?.pValue ?? null;
+  const decisionPValueDisplay = decisionPValue !== null && decisionPValue !== undefined
+    ? Number(decisionPValue).toFixed(4)
+    : 'Н/Д';
+  const isComplete = Number(timeSeriesData?.completion_percentage ?? 0) >= 100 || Boolean(timeSeriesData?.stopped_early);
+  const allVariantsWorse = bestUpliftValue !== null && bestUpliftValue < 0;
+  const hasPositiveWinner = bestUpliftValue !== null && bestUpliftValue > 0 && decisionPValue !== null && decisionPValue < 0.05;
+  const bestUpliftLabel = allVariantsWorse && bestUpliftStat
+    ? `Лучший из ухудшений (вариант ${bestUpliftStat.variant})`
+    : bestUpliftLabelBase;
+
+  const renderResultsTable = () => {
+    if (!timeSeriesData || chartData.length === 0 || !finalSnapshot || !controlVariant) return null;
+
+    const upliftValues = timeSeriesData.variants.map((variant) => {
+      if (variant === controlVariant) return 0;
+      const variantData = finalSnapshot?.[variant];
+      const variantMean = Number(variantData?.mean_metric ?? 0);
+      return controlMetric > 0
+        ? ((variantMean - controlMetric) / controlMetric * 100)
+        : 0;
+    });
+    const maxUpliftValue = upliftValues.length > 0 ? Math.max(...upliftValues) : 0;
 
     const tableData = timeSeriesData.variants.map((variant) => {
-      const variantData = finalData?.[variant];
+      const variantData = finalSnapshot?.[variant];
       const variantMean = Number(variantData?.mean_metric ?? 0);
       const variantCum = Number(variantData?.cumulative_metric ?? 0);
       const variantSample = Number(variantData?.sample_size ?? 0);
@@ -108,22 +165,38 @@ export const ResultsOverviewPage: React.FC = () => {
         ? null
         : (timeSeriesData?.p_values_corrected_latest?.[variant] ?? null);
 
-      const uplift = controlMetric > 0
+      const upliftValue = controlMetric > 0
         ? ((variantMean - controlMetric) / controlMetric * 100)
         : 0;
 
       const significanceSource = variantPValueCorrected ?? variantPValueRaw;
+      const winProbability = (pValue: number | null, uplift: number) => {
+        if (pValue === null || pValue === undefined) return null;
+        if (uplift <= 0) return 1;
+        if (pValue < 0.05) return 95;
+        return Math.max(2, Math.round((1 - pValue) * 10));
+      };
+
+      const isControl = variant === controlVariant;
+      const isBestVariant = isComplete && !isControl && maxUpliftValue > 0 && Math.abs(upliftValue - maxUpliftValue) < 0.0001;
+      const isWorse = !isControl && upliftValue < 0;
+      const isLeader = isComplete && isControl && maxUpliftValue <= 0;
 
       return {
         variant,
         sample_size: variantSample,
         mean_metric: variantMean.toFixed(4),
         cumulative_metric: variantCum.toFixed(2),
-        uplift: uplift.toFixed(2),
+        uplift: upliftValue.toFixed(2),
+        uplift_value: upliftValue,
+        win_probability: winProbability(significanceSource, upliftValue),
         p_value_raw: variantPValueRaw !== null && variantPValueRaw !== undefined ? Number(variantPValueRaw).toFixed(4) : 'Н/Д',
         p_value_corrected: variantPValueCorrected !== null && variantPValueCorrected !== undefined ? Number(variantPValueCorrected).toFixed(4) : 'Н/Д',
         significant: significanceSource !== null && significanceSource !== undefined && significanceSource < 0.05,
-        is_control: variant === controlVariant,
+        is_control: isControl,
+        is_best: isBestVariant,
+        is_worse: isWorse,
+        is_leader: isLeader,
       };
     });
 
@@ -136,6 +209,9 @@ export const ResultsOverviewPage: React.FC = () => {
           <Space>
             <Tag color={getVariantColor(variant)}>{variant}</Tag>
             {record.is_control && <Tag color="default">контроль</Tag>}
+            {record.is_leader && <Tag color="green">Лидер</Tag>}
+            {record.is_best && <Tag color="success">Лучше контроля</Tag>}
+            {record.is_worse && <Tag color="error">Ухудшение</Tag>}
           </Space>
         ),
       },
@@ -163,8 +239,26 @@ export const ResultsOverviewPage: React.FC = () => {
         render: (uplift: string, record: any) => {
           if (record.is_control) return <Text type="secondary">—</Text>;
           return (
-            <Text type={parseFloat(uplift) > 0 ? 'success' : 'danger'} strong>
-              {parseFloat(uplift) > 0 ? '+' : ''}{uplift}%
+            <Text type={record.uplift_value > 0 ? 'success' : 'danger'} strong>
+              {record.uplift_value > 0 ? '+' : ''}{uplift}%
+            </Text>
+          );
+        },
+      },
+      {
+        title: (
+          <Tooltip title="Эвристическая оценка на основе p-value и направления прироста; не является байесовской вероятностью.">
+            Вероятность выигрыша
+          </Tooltip>
+        ),
+        dataIndex: 'win_probability',
+        key: 'win_probability',
+        render: (value: number | null, record: any) => {
+          if (record.is_control) return <Text type="secondary">—</Text>;
+          if (value === null) return <Text type="secondary">Н/Д</Text>;
+          return (
+            <Text type={value >= 50 ? 'success' : 'danger'} strong>
+              {value}%
             </Text>
           );
         },
@@ -192,10 +286,13 @@ export const ResultsOverviewPage: React.FC = () => {
         key: 'significant',
         render: (_: any, record: any) => {
           if (record.is_control) return <Tag color="default">Контроль</Tag>;
+          if (record.significant && record.uplift_value < 0) {
+            return <Tag icon={<CloseCircleOutlined />} color="error">Значимо хуже</Tag>;
+          }
           return record.significant ? (
             <Tag icon={<CheckCircleOutlined />} color="success">Статистически значимо</Tag>
           ) : (
-            <Tag icon={<WarningOutlined />} color="warning">Статистически незначимо</Tag>
+            <Tag icon={<CloseCircleOutlined />} color="error">Статистически незначимо</Tag>
           );
         },
       },
@@ -214,13 +311,21 @@ export const ResultsOverviewPage: React.FC = () => {
             pagination={false}
             size="small"
             style={{ color: c.textPrimary }}
+            onRow={(record: any) => ({
+              style: !record.is_control && parseFloat(record.uplift) < 0
+                ? { backgroundColor: c.dangerSoft }
+                : undefined,
+            })}
           />
+          <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+            * Для финального вывода используется скорректированное p-значение (Холм).
+          </Text>
         </div>
       </div>
     );
   };
 
-  const recommendation = recommendationLabel[timeSeriesData?.recommendation_status || 'need_more_data']
+  const recommendationFallback = recommendationLabel[timeSeriesData?.recommendation_status || 'need_more_data']
     || recommendationLabel.need_more_data;
 
   const validity = validityLabel[timeSeriesData?.analysis_validity || 'exploration_only']
@@ -237,22 +342,21 @@ export const ResultsOverviewPage: React.FC = () => {
     return color as ValueTone;
   };
 
-  const correctedWinnerPValue =
-    timeSeriesData?.winner && timeSeriesData?.p_values_corrected_latest?.[timeSeriesData.winner] !== undefined
-      ? Number(timeSeriesData.p_values_corrected_latest[timeSeriesData.winner]).toFixed(4)
-      : 'Н/Д';
+  const correctedWinnerPValue = decisionPValueDisplay;
 
-  const winnerUplift =
+  const winnerUpliftFromData =
     typeof timeSeriesData?.winner_uplift_percent === 'number'
       ? `${timeSeriesData.winner_uplift_percent >= 0 ? '+' : ''}${timeSeriesData.winner_uplift_percent.toFixed(2)}%`
-      : 'Н/Д';
+      : null;
 
-  const upliftTone: ValueTone = typeof timeSeriesData?.winner_uplift_percent === 'number'
-    ? (timeSeriesData.winner_uplift_percent >= 0 ? 'success' : 'danger')
+  const winnerUplift = winnerUpliftFromData ?? bestUpliftDisplay;
+
+  const upliftTone: ValueTone = bestUpliftValue !== null
+    ? (bestUpliftValue >= 0 ? 'success' : 'danger')
     : 'secondary';
 
-  const pValueTone: ValueTone = correctedWinnerPValue !== 'Н/Д'
-    ? (Number(correctedWinnerPValue) < 0.05 ? 'success' : 'danger')
+  const pValueTone: ValueTone = decisionPValue !== null && decisionPValue !== undefined
+    ? (decisionPValue < 0.05 ? 'success' : 'danger')
     : 'secondary';
 
   const confidenceTone: ValueTone = toTone(confidenceLabel[timeSeriesData?.winner_confidence || 'low']?.color);
@@ -267,7 +371,37 @@ export const ResultsOverviewPage: React.FC = () => {
 
   const rolloutTone: ValueTone = timeSeriesData?.rollout_hint ? 'warning' : 'secondary';
 
-  const recommendationDetails = () => {
+  const validitySummary = validity.color === 'success'
+    ? 'Валидность анализа: Валиден'
+    : validity.color === 'warning'
+      ? 'Валидность анализа: Ограничен (исследовательский режим)'
+      : 'Валидность анализа: Невалиден';
+
+  const resultSummary = !isComplete
+    ? 'Результат: Предварительно (идёт набор данных)'
+    : decisionPValue !== null && decisionPValue !== undefined
+      ? `Результат: ${decisionPValue < 0.05 ? 'Статистически значим' : 'Статистически незначим'} (min p=${decisionPValueDisplay}${minPValueStat?.variant ? `, вариант ${minPValueStat.variant}` : ''})`
+      : 'Результат: Недостаточно данных';
+
+  const preCompleteSummary = decisionPValue !== null && decisionPValue !== undefined
+    ? (decisionPValue < 0.05
+      ? (bestUpliftValue !== null && bestUpliftValue < 0
+        ? `Предварительно: значимое ухудшение ${bestUpliftDisplay} (min p=${decisionPValueDisplay})`
+        : `Предварительно: значимый рост ${bestUpliftDisplay} (min p=${decisionPValueDisplay})`)
+      : `Предварительно: различия незначимы (min p=${decisionPValueDisplay})`)
+    : 'Идёт набор данных, выводы преждевременны.';
+
+  const dynamicsSummary = bestUpliftValue !== null && controlVariant
+    ? (allVariantsWorse
+      ? `Динамика: Все варианты хуже ${controlVariant}; лучший из них ${bestUpliftStat?.variant} на ${Math.abs(bestUpliftValue).toFixed(2)}%`
+      : bestUpliftValue > 0
+        ? `Динамика: Лучший вариант ${bestUpliftStat?.variant} опережает ${controlVariant} на ${Math.abs(bestUpliftValue).toFixed(2)}%`
+        : `Динамика: Нет отличий от контроля ${controlVariant}`)
+    : null;
+
+  const decisionBasis = [validitySummary, resultSummary, dynamicsSummary].filter(Boolean) as string[];
+
+  const recommendationDetailsFallback = () => {
     if (timeSeriesData?.recommendation_status === 'deploy') {
       const rolloutHint = timeSeriesData?.rollout_hint ? `Рекомендуется поэтапная выкатка в прод: ${timeSeriesData.rollout_hint}.` : 'Можно внедрять сразу.';
       return ` ${rolloutHint} При запуске — мониторинг метрик и стоп-условия при ухудшении.`;
@@ -277,6 +411,49 @@ export const ResultsOverviewPage: React.FC = () => {
     }
     return 'Требуется больше данных: дождитесь достаточной статистики и подтвердите стабильность качества данных перед решением о внедрении.';
   };
+
+  const recommendationView = (() => {
+    if (!isComplete) {
+      return {
+        label: 'Предварительный результат',
+        color: 'warning',
+        details: preCompleteSummary,
+      };
+    }
+    if (allVariantsWorse) {
+      return {
+        label: 'Все варианты хуже контроля',
+        color: 'error',
+        details: bestUpliftValue !== null
+          ? `Лучший из альтернатив — ${bestUpliftStat?.variant} (${bestUpliftDisplay}). Рекомендуется оставить контроль.`
+          : 'Рекомендуется оставить контроль.',
+      };
+    }
+    if (decisionPValue !== null && decisionPValue >= 0.05) {
+      return {
+        label: 'Нет статистически значимых различий',
+        color: 'default',
+        details: `Различия не подтверждены (min p=${decisionPValueDisplay}${minPValueStat?.variant ? `, вариант ${minPValueStat.variant}` : ''}).`,
+      };
+    }
+    if (decisionPValue !== null && decisionPValue < 0.05 && bestUpliftValue !== null && bestUpliftValue > 0) {
+      return {
+        label: 'Есть статистически значимый рост',
+        color: 'success',
+        details: `Зафиксирован рост на ${bestUpliftDisplay} при min p=${decisionPValueDisplay}.`,
+      };
+    }
+    return { ...recommendationFallback, details: recommendationDetailsFallback() };
+  })();
+
+  const shouldFallbackWinnerToControl = isComplete && bestUpliftValue !== null && bestUpliftValue <= 0 && !!controlVariant;
+  const resolvedWinnerVariant = isComplete
+    ? (hasPositiveWinner ? bestUpliftStat?.variant ?? null : (shouldFallbackWinnerToControl ? controlVariant : null))
+    : null;
+  const resolvedWinnerLabel = resolvedWinnerVariant
+    ? (shouldFallbackWinnerToControl ? `Контроль (Вариант ${controlVariant})` : `Вариант ${resolvedWinnerVariant}`)
+    : (isComplete ? 'Победитель не определён' : 'Победитель: предварительно');
+  const resolvedWinnerUplift = resolvedWinnerVariant ? winnerUplift : null;
 
   return (
     <div style={{ color: c.textPrimary }}>
@@ -298,13 +475,15 @@ export const ResultsOverviewPage: React.FC = () => {
             <Col xs={24} md={14}>
               <Space direction="vertical" size={8}>
                 <Text type="secondary" style={{ fontSize: 12 }}>Победитель</Text>
-                {timeSeriesData?.winner ? (
+                {resolvedWinnerVariant ? (
                   <Space align="center" wrap>
-                    <Tag color="success" style={{ fontSize: 15, padding: '4px 12px' }}>Вариант {timeSeriesData.winner}</Tag>
-                    <Text strong style={{ fontSize: 24, color: c.textPrimary }}>{winnerUplift}</Text>
+                    <Tag color="success" style={{ fontSize: 15, padding: '4px 12px' }}>{resolvedWinnerLabel}</Tag>
+                    {resolvedWinnerUplift && (
+                      <Text strong style={{ fontSize: 24, color: c.textPrimary }}>{resolvedWinnerUplift}</Text>
+                    )}
                   </Space>
                 ) : (
-                  <Tag color="default">Победитель не определён</Tag>
+                  <Tag color="default">{resolvedWinnerLabel}</Tag>
                 )}
               </Space>
             </Col>
@@ -312,19 +491,19 @@ export const ResultsOverviewPage: React.FC = () => {
             <Col xs={24} md={10}>
               <Space direction="vertical" size={8} style={{ width: '100%' }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>Рекомендация</Text>
-                <Tag color={recommendation.color} icon={<RocketOutlined />} style={{ width: 'fit-content', fontSize: 14, padding: '4px 12px' }}>
-                  {recommendation.label}
+                <Tag color={recommendationView.color} icon={<RocketOutlined />} style={{ width: 'fit-content', fontSize: 14, padding: '4px 12px' }}>
+                  {recommendationView.label}
                 </Tag>
-                <Text style={{ color: c.textMuted }}>{recommendationDetails()}</Text>
+                <Text style={{ color: c.textMuted }}>{recommendationView.details}</Text>
               </Space>
             </Col>
           </Row>
 
-          {(timeSeriesData?.recommendation_reason || []).length > 0 && (
+          {decisionBasis.length > 0 && (
             <div style={{ marginTop: 14 }}>
               <Text type="secondary">Основания решения:</Text>
               <ul style={{ margin: '6px 0 0 0', paddingLeft: 18 }}>
-                {(timeSeriesData?.recommendation_reason || []).map((reason, idx) => (
+                {decisionBasis.map((reason, idx) => (
                   <li key={`${reason}-${idx}`}>
                     <Text>{reason}</Text>
                   </li>
@@ -339,9 +518,9 @@ export const ResultsOverviewPage: React.FC = () => {
         <Col xs={24} md={8}>
           <MetricCard title="Ключевые метрики" c={c}>
             <Space direction="vertical" size={8} style={{ width: '100%' }}>
-              <MetricRow label="Прирост" value={winnerUplift} strong valueTone={upliftTone} />
+              <MetricRow label={bestUpliftLabel} value={bestUpliftDisplay} strong valueTone={upliftTone} />
               <MetricRow
-                label="Скорректированное p-значение"
+                label={`Минимальное p-значение${minPValueStat?.variant ? ` (вариант ${minPValueStat.variant})` : ''}`}
                 value={correctedWinnerPValue}
                 valueTone={pValueTone}
               />

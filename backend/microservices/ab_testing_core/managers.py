@@ -472,6 +472,37 @@ class AdaptiveABTestingPlatform:
             test_id = str(db_session.test_id)
             effective_event_id = event_id or f"{session_id}:{metric_name}:{uuid.uuid4().hex[:12]}"
 
+            if not self._ensure_test_loaded(test_id):
+                raise ValueError(f"Test {test_id} not found")
+
+            config = self.test_manager.test_configs.get(test_id)
+            primary_metric = self._get_primary_metric(test_id)
+
+            if config:
+                metric_type = config.metric_type
+
+                if metric_name == primary_metric:
+                    if metric_type == MetricType.BINARY:
+                        if float(value) not in (0.0, 1.0):
+                            raise ValueError("Binary-метрика должна быть 0 или 1")
+                    elif metric_type == MetricType.CONTINUOUS:
+                        if not np.isfinite(float(value)):
+                            raise ValueError("Continuous-метрика должна быть конечным числом")
+                    elif metric_type == MetricType.RATIO:
+                        raise ValueError(
+                            "Для ratio-метрики нельзя писать primary_metric; используйте *_numerator и *_denominator"
+                        )
+
+                if metric_type == MetricType.RATIO:
+                    ratio_num_key = f"{primary_metric}_numerator"
+                    ratio_den_key = f"{primary_metric}_denominator"
+                    if metric_name == ratio_num_key:
+                        if not np.isfinite(float(value)):
+                            raise ValueError("Ratio numerator должен быть конечным числом")
+                    if metric_name == ratio_den_key:
+                        if not np.isfinite(float(value)) or float(value) <= 0:
+                            raise ValueError("Ratio denominator должен быть положительным конечным числом")
+
             _, created = crud.create_metric_event_if_absent(
                 db,
                 event_id=effective_event_id,
@@ -498,11 +529,8 @@ class AdaptiveABTestingPlatform:
             if session is not None:
                 session.metrics[metric_name] = float(value)
 
-            primary_metric = self._get_primary_metric(test_id)
-
             if metric_name == primary_metric:
-                if self._ensure_test_loaded(test_id):
-                    self.test_manager.record_metric(test_id, str(db_session.variant), float(value))
+                self.test_manager.record_metric(test_id, str(db_session.variant), float(value))
 
                 splitter = self._splitters.get(test_id)
                 if isinstance(splitter, AdaptiveTrafficSplitter):
@@ -563,8 +591,6 @@ class AdaptiveABTestingPlatform:
                 variant_name = str(session.variant)
 
                 if config.metric_type == MetricType.RATIO:
-                    # Предпочитаем явную модель ratio: numerator/denominator per user.
-                    # Поддерживаем фолбэк на legacy scalar ratio в primary_metric.
                     num_raw = metrics.get(ratio_num_key)
                     den_raw = metrics.get(ratio_den_key)
 
@@ -580,16 +606,6 @@ class AdaptiveABTestingPlatform:
                                 ratio_value = num / den
                     except Exception:
                         ratio_value = None
-
-                    if ratio_value is None and config.primary_metric in metrics:
-                        try:
-                            legacy_ratio = float(metrics[config.primary_metric])
-                            if np.isfinite(legacy_ratio):
-                                ratio_components[variant_name]["numerators"].append(legacy_ratio)
-                                ratio_components[variant_name]["denominators"].append(1.0)
-                                ratio_value = legacy_ratio
-                        except Exception:
-                            ratio_value = None
 
                     if ratio_value is not None:
                         try:
@@ -694,6 +710,28 @@ class AdaptiveABTestingPlatform:
             alpha=0.05,
         )
 
+        min_power: Optional[float] = None
+        for check in quality_gate.get("checks", []):
+            if check.get("id") == "power":
+                try:
+                    min_power = float(check.get("actual"))
+                except Exception:
+                    min_power = None
+                break
+
+        srm_passed: Optional[bool] = None
+        if db_test and db_test.srm_check_passed is not None:
+            srm_passed = bool(db_test.srm_check_passed == 1)
+
+        decision_policy = ABDecisionEngine.evaluate_decision_policy(
+            analysis_validity=analysis_validity,
+            srm_passed=srm_passed,
+            guardrails_passed=bool(guardrails_status.get("passed", True)),
+            corrected_p_values=corrected_p,
+            power=min_power,
+            alpha=0.05,
+        )
+
         return {
             'test_id': test_id,
             'results': {k: asdict(v) for k, v in results.items()},
@@ -707,6 +745,7 @@ class AdaptiveABTestingPlatform:
             'analysis_validity': analysis_validity,
             'guardrails': guardrails_status,
             'quality_gate': quality_gate,
+            'decision_policy': asdict(decision_policy),
         }
     
     def stop_test(self, test_id: str, reason: str = "Manual stop") -> Dict[str, Any]:
