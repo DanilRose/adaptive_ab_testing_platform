@@ -391,7 +391,7 @@ export const ResultsOverviewPage: React.FC = () => {
   const qualityTone: ValueTone = hasInsufficientSample ? 'danger' : toTone(quality.color);
   const qualityValue = hasInsufficientSample ? 'Низкая' : quality.label;
 
-  const hasStatSig = decisionPValue !== null && decisionPValue < 0.05;
+  const hasStatSig = decisionPValue !== null && decisionPValue !== undefined && decisionPValue < 0.05;
   const pValueForNarrative = decisionPValue !== null
     ? (decisionPValue < 0.0001 ? 'p < 0.0001' : `p = ${decisionPValue.toFixed(4)}`)
     : 'p недоступно';
@@ -401,13 +401,13 @@ export const ResultsOverviewPage: React.FC = () => {
     : validity.color === 'warning'
       ? 'Валидность анализа: Ограничен (исследовательский режим)'
       : 'Валидность анализа: Невалиден';
-
+      
   const resultSummary = !hasEnoughProgressForPreliminary
     ? `Результат: Недостаточно данных для предварительного вывода (прогресс ${completionPercentage.toFixed(1)}%, требуется от 30%).`
     : !isComplete
     ? `Результат: Предварительный анализ доступен.`
     : decisionPValue !== null && decisionPValue !== undefined
-      ? `Результат: ${decisionPValue < 0.05 ? 'Статистически значим' : 'Статистически незначим'} (min p=${decisionPValueDisplay}${minPValueStat?.variant ? `, вариант ${minPValueStat.variant}` : ''})`
+      ? `Результат: ${hasStatSig ? 'Статистически значим' : 'Статистически незначим'} (min p=${decisionPValueDisplay}${minPValueStat?.variant ? `, вариант ${minPValueStat.variant}` : ''})`
       : 'Результат: Недостаточно данных';
 
   const preCompleteSummary = !hasEnoughProgressForPreliminary
@@ -415,7 +415,7 @@ export const ResultsOverviewPage: React.FC = () => {
     : hasInsufficientSample
     ? `Предупреждение: Слишком малая выборка. Минимум на вариант: ${MIN_SAMPLE_PER_VARIANT_FOR_SIGNIFICANCE}, сейчас минимум: ${minSampleSizeAcrossVariants}. Для выявления эффекта даже при крупном uplift требуется как минимум 1000-2000 наблюдений на вариант.`
     : decisionPValue !== null && decisionPValue !== undefined
-    ? (decisionPValue < 0.05
+    ? (hasStatSig
       ? (bestUpliftValue !== null && bestUpliftValue < 0
         ? `Предварительно: значимое ухудшение ${bestUpliftDisplay} (min p=${decisionPValueDisplay})`
         : `Предварительно: значимый рост ${bestUpliftDisplay} (min p=${decisionPValueDisplay})`)
@@ -506,7 +506,7 @@ export const ResultsOverviewPage: React.FC = () => {
           : `Различия пока не подтверждены статистически (${pValueForNarrative}${minPValueStat?.variant ? `, лучший сигнал у варианта ${minPValueStat.variant}` : ''}). Продолжайте набор данных.`,
       };
     }
-    if (decisionPValue !== null && decisionPValue < 0.05 && bestUpliftValue !== null && bestUpliftValue > 0) {
+    if (hasStatSig && bestUpliftValue !== null && bestUpliftValue > 0) {
       return {
         label: 'Есть статистически значимый рост',
         color: 'success',
@@ -525,7 +525,7 @@ export const ResultsOverviewPage: React.FC = () => {
       : null,
   ].filter(Boolean).join(' ');
 
-  const hasFinalWinner = isComplete && decisionPValue !== null && decisionPValue < 0.05 && bestUpliftValue !== null && bestUpliftValue > 0;
+  const hasFinalWinner = isComplete && hasStatSig && bestUpliftValue !== null && bestUpliftValue > 0;
   const shouldFallbackWinnerToControl = !isComplete && hasEnoughProgressForPreliminary && bestUpliftValue !== null && bestUpliftValue <= 0 && !!controlVariant;
   const resolvedWinnerVariant = isComplete
     ? (hasFinalWinner ? bestUpliftStat?.variant ?? null : null)
